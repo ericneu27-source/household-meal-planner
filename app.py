@@ -226,7 +226,10 @@ with tab1:
                         else:
                             col_e1, col_e2 = st.columns([4, 1])
                             with col_e1:
-                                edited_line = st.text_input(f"Edit {idx}", value=line, key=f"edit_line_{day}_{idx}", label_visibility="collapsed")
+                                # FIXED: We make the widget key dependent on the line's actual text.
+                                # If the AI updates the text, the key changes, and Streamlit forgets its old memory!
+                                dynamic_key = f"edit_line_{day}_{idx}_{line}"
+                                edited_line = st.text_input(f"Edit {idx}", value=line, key=dynamic_key, label_visibility="collapsed")
                                 new_lines.append(edited_line)
                             with col_e2:
                                 if st.button("🪄 AI Sub", key=f"sub_btn_{day}_{idx}"):
@@ -247,15 +250,8 @@ with tab1:
                                         lines[idx] = new_ingredient
                                         updated_meal = "\n".join(lines)
                                         
-                                        # Update Google Sheets
                                         schedule_ws.update_cell(details["row_index"], 3, updated_meal)
                                         fetch_all_records.clear("Schedule")
-                                        
-                                        # FIXED: Delete the widget's memory so it safely pulls the new text on rerun!
-                                        widget_key = f"edit_line_{day}_{idx}"
-                                        if widget_key in st.session_state:
-                                            del st.session_state[widget_key]
-                                        
                                         st.rerun()
                                         
                     st.write("")
