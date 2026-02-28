@@ -13,7 +13,6 @@ genai.configure(api_key=api_key)
 model = genai.GenerativeModel('gemini-2.5-flash')
 
 # --- GOOGLE SHEETS CONNECTION ---
-# We use @st.cache_resource so it doesn't log in from scratch every time you click a button
 @st.cache_resource
 def get_google_sheet():
     creds_dict = json.loads(st.secrets["GCP_SERVICE_ACCOUNT"])
@@ -31,10 +30,8 @@ except Exception as e:
     st.stop()
 
 # --- INITIALIZE OR READ DATA ---
-# 1. Schedule Data
 schedule_data = schedule_ws.get_all_records()
 if not schedule_data:
-    # If the sheet is completely blank, build the headers and default days
     schedule_ws.append_row(["Day", "Status", "Meal"])
     defaults = [
         ["Monday", "Cook at Home", ""],
@@ -48,22 +45,26 @@ if not schedule_data:
     schedule_ws.append_rows(defaults)
     schedule_data = schedule_ws.get_all_records()
 
-# Organize the data so the app can read it easily
 schedule_dict = {row["Day"]: {"status": row["Status"], "meal": row["Meal"], "row_index": i + 2} for i, row in enumerate(schedule_data)}
 
-# 2. Pantry Data
 pantry_data = pantry_ws.col_values(1)
 if not pantry_data:
-    # If the pantry tab is blank, add the header and some basics
     pantry_ws.append_row(["Item"])
     pantry_ws.append_rows([["Olive Oil"], ["Salt"], ["Black Pepper"], ["Garlic Powder"]])
     pantry_data = pantry_ws.col_values(1)
 
-current_pantry = pantry_data[1:] # Grab everything except the "Item" header row
+current_pantry = pantry_data[1:]
 
 # --- HEADER ---
-st.title("🍳 Household Meal & Grocery Planner")
-st.markdown("*Configured for: 3 Adults, 2 Children | Cook Days: Tues & Thurs*")
+col_h1, col_h2 = st.columns([4, 1])
+with col_h1:
+    st.title("🍳 Household Meal & Grocery Planner")
+    st.markdown("*Configured for: 3 Adults, 2 Children | Cook Days: Tues & Thurs*")
+with col_h2:
+    st.write("") 
+    if st.button("🔄 Sync App", use_container_width=True):
+        st.rerun()
+        
 st.divider()
 
 # --- TABS ---
@@ -71,7 +72,6 @@ tab1, tab2, tab3 = st.tabs(["📅 Weekly Schedule", "🛒 Grocery Lists", "🥫 
 
 with tab1:
     st.header("This Week's Schedule")
-    
     for day, details in schedule_dict.items():
         col1, col2 = st.columns([1, 3])
         with col1:
@@ -105,14 +105,12 @@ with tab1:
                         (Provide a simple bulleted list with quantities)
                         """
                         response = model.generate_content(prompt)
-                        # Type the recipe directly into the correct row and column in Google Sheets
                         schedule_ws.update_cell(details["row_index"], 3, response.text)
                         st.rerun()
         st.divider()
 
 with tab2:
     st.header("🛒 Smart Shopping Lists")
-    
     if st.button("Compile Grocery Lists"):
         with st.spinner("Chef Gemini is organizing the aisles..."):
             household_text = ""
@@ -173,7 +171,6 @@ with tab3:
         st.write("")
         if st.button("Add Item", use_container_width=True):
             if new_item and new_item.title() not in current_pantry:
-                # Add the new item to the bottom of the Google Sheet
                 pantry_ws.append_row([new_item.title()])
                 st.rerun()
                 
@@ -189,7 +186,6 @@ with tab3:
                 st.write(f"✅ **{item}**")
             with col_item2:
                 if st.button("Use Up", key=f"del_{item}"):
-                    # Delete the row right out of the Google Sheet
                     row_to_delete = i + 2 
                     pantry_ws.delete_rows(row_to_delete)
                     st.rerun()
