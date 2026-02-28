@@ -111,7 +111,6 @@ with tab1:
             if details["meal"]:
                 st.write(details["meal"])
                 
-                # NEW: The Modify Recipe Editor
                 with st.expander("✏️ Modify Recipe / Ingredients"):
                     edited_recipe = st.text_area("Make your changes here (the Grocery List will use your updated version!):", value=details["meal"], height=200, key=f"edit_recipe_{day}")
                     if st.button("Save Edits", key=f"save_edit_{day}", use_container_width=True):
@@ -129,7 +128,7 @@ with tab1:
                     if st.button("Save to Vault", key=f"save_{day}", use_container_width=True):
                         if meal_name:
                             numeric_rating = rating[0] 
-                            vault_ws.append_row([meal_name, edited_recipe, numeric_rating]) # Note: saves your EDITED recipe to the vault!
+                            vault_ws.append_row([meal_name, edited_recipe, numeric_rating])
                             st.success(f"Saved {meal_name} with {numeric_rating} stars!")
                             st.rerun()
             
@@ -175,51 +174,67 @@ with tab2:
     st.header("🛒 Smart Shopping Lists")
     if st.button("Compile Grocery Lists"):
         with st.spinner("Chef Gemini is organizing the aisles..."):
+            
+            # --- Gathering the 3 distinct lists ---
             household_text = ""
             for day in ["Sunday", "Monday"]:
                 if schedule_dict[day]["meal"]:
                     household_text += f"\n--- {day} ---\n{schedule_dict[day]['meal']}"
             
-            cook_text = ""
-            for day in ["Tuesday", "Wednesday", "Thursday", "Friday"]:
+            cook_text_tues_wed = ""
+            for day in ["Tuesday", "Wednesday"]:
                 if schedule_dict[day]["meal"]:
-                    cook_text += f"\n--- {day} ---\n{schedule_dict[day]['meal']}"
+                    cook_text_tues_wed += f"\n--- {day} ---\n{schedule_dict[day]['meal']}"
+                    
+            cook_text_thurs_fri = ""
+            for day in ["Thursday", "Friday"]:
+                if schedule_dict[day]["meal"]:
+                    cook_text_thurs_fri += f"\n--- {day} ---\n{schedule_dict[day]['meal']}"
             
             pantry_string = ", ".join(current_pantry)
 
+            # --- Household List ---
             if household_text:
                 prompt_house = f"""
-                Extract all ingredients from these recipes and combine them into a single grocery list. 
-                Group the items by standard grocery store aisles. Combine quantities where possible.
-                
-                CRITICAL INSTRUCTION: Here is the user's current pantry inventory: {pantry_string}.
-                Do NOT include these pantry items in the final shopping list.
-                
+                Extract all ingredients from these recipes and combine them into a single grocery list. Group items by standard grocery store aisles. Combine quantities where possible.
+                CRITICAL INSTRUCTION: Here is the user's current pantry inventory: {pantry_string}. Do NOT include these pantry items in the final shopping list.
                 Format it as a clean checklist.
                 Recipes:\n{household_text}
                 """
-                st.subheader("Your Master Household List (Sun & Mon)")
+                st.subheader("🏡 Your Master Household List (Sun & Mon)")
                 st.write(model.generate_content(prompt_house).text)
             else:
                 st.info("No meals scheduled for Sunday or Monday yet.")
                 
             st.divider()
             
-            if cook_text:
-                prompt_cook = f"""
-                Extract all ingredients from these recipes and combine them into a single grocery list. 
-                Group the items by standard grocery store aisles. Combine quantities where possible.
-                
-                CRITICAL INSTRUCTION: Here is the user's current pantry inventory: {pantry_string}.
-                Do NOT include these pantry items in the final shopping list.
-                
+            # --- Cook List 1: Tues & Wed ---
+            if cook_text_tues_wed:
+                prompt_cook_1 = f"""
+                Extract all ingredients from these recipes and combine them into a single grocery list. Group items by standard grocery store aisles. Combine quantities where possible.
+                CRITICAL INSTRUCTION: Here is the user's current pantry inventory: {pantry_string}. Do NOT include these pantry items in the final shopping list.
                 Format it as a clean checklist.
-                Recipes:\n{cook_text}
+                Recipes:\n{cook_text_tues_wed}
                 """
-                st.subheader("The Cook's Prep List (Tues - Fri)")
-                st.write(model.generate_content(prompt_cook).text)
+                st.subheader("🧑‍🍳 The Cook's List 1: Tuesday Shopping (Preps Tues & Wed)")
+                st.write(model.generate_content(prompt_cook_1).text)
             else:
-                st.info("No meals scheduled for Tuesday through Friday yet.")
+                st.info("No meals scheduled for Tuesday or Wednesday yet.")
+                
+            st.divider()
+            
+            # --- Cook List 2: Thurs & Fri ---
+            if cook_text_thurs_fri:
+                prompt_cook_2 = f"""
+                Extract all ingredients from these recipes and combine them into a single grocery list. Group items by standard grocery store aisles. Combine quantities where possible.
+                CRITICAL INSTRUCTION: Here is the user's current pantry inventory: {pantry_string}. Do NOT include these pantry items in the final shopping list.
+                Format it as a clean checklist.
+                Recipes:\n{cook_text_thurs_fri}
+                """
+                st.subheader("🧑‍🍳 The Cook's List 2: Thursday Shopping (Preps Thurs & Fri)")
+                st.write(model.generate_content(prompt_cook_2).text)
+            else:
+                st.info("No meals scheduled for Thursday or Friday yet.")
 
 with tab3:
     st.header("🥫 Virtual Pantry")
@@ -230,9 +245,12 @@ with tab3:
         st.write("") 
         st.write("")
         if st.button("Add Item", use_container_width=True):
-            if new_item and new_item.title() not in current_pantry:
-                pantry_ws.append_row([new_item.title()])
-                st.rerun()
+            if new_item:
+                # NEW: Clean out any weird characters like ** before saving to the database
+                clean_item = new_item.replace("*", "").strip().title()
+                if clean_item and clean_item not in current_pantry:
+                    pantry_ws.append_row([clean_item])
+                    st.rerun()
                 
     st.divider()
     
@@ -243,7 +261,8 @@ with tab3:
         for i, item in enumerate(current_pantry):
             col_item1, col_item2 = st.columns([4, 1])
             with col_item1:
-                st.write(f"✅ **{item}**")
+                # Swapped out the bold formatting just to keep it absolutely clean and bug-free
+                st.write(f"✅ {item}")
             with col_item2:
                 if st.button("Use Up", key=f"del_{item}"):
                     row_to_delete = i + 2 
