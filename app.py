@@ -226,8 +226,6 @@ with tab1:
                         else:
                             col_e1, col_e2 = st.columns([4, 1])
                             with col_e1:
-                                # FIXED: We make the widget key dependent on the line's actual text.
-                                # If the AI updates the text, the key changes, and Streamlit forgets its old memory!
                                 dynamic_key = f"edit_line_{day}_{idx}_{line}"
                                 edited_line = st.text_input(f"Edit {idx}", value=line, key=dynamic_key, label_visibility="collapsed")
                                 new_lines.append(edited_line)
@@ -235,8 +233,11 @@ with tab1:
                                 if st.button("🪄 AI Sub", key=f"sub_btn_{day}_{idx}"):
                                     with st.spinner("Swapping..."):
                                         title = next((l for l in lines if "**" in l), "the recipe").replace("**", "")
+                                        # NEW: Strictly ordering the AI to swap the ingredient entirely!
                                         prompt = f"""
-                                        I am cooking {title}. I need a direct ingredient substitution for '{line}'. 
+                                        I am cooking {title}. I need a culinary substitute for '{line}'. 
+                                        You MUST provide a completely DIFFERENT ingredient (e.g., swapping chicken for tofu, or cilantro for parsley). 
+                                        Do NOT just give me a different preparation or amount of the exact same ingredient.
                                         Please provide JUST the replacement ingredient and its measurement, formatted exactly like the original line. 
                                         Do not use introductory text.
                                         """
@@ -331,21 +332,25 @@ with tab2:
             groceries_ws.append_row(["List Type", "Item"])
             rows_to_add = []
 
+            # NEW: We told the AI to sort the list internally without printing the aisle names!
             system_prompt = f"""
             Extract all ingredients from the following recipes. Combine quantities where possible.
             CRITICAL INSTRUCTION: The user already has these pantry items: {pantry_string}. DO NOT include them.
             
             FORMATTING RULES:
             1. Output a NEWLINE-SEPARATED list. 
-            2. Put each completely separate ingredient on its own line.
-            3. NEVER split a single ingredient across multiple lines. "2 lbs Boneless, Skinless Salmon" MUST be on one single line.
-            4. You MAY use commas within an ingredient line.
-            5. Do not use bullet points, asterisks, or introductory text.
+            2. SORT the list by standard grocery store aisles (e.g., group all Produce together, then Meat, then Dairy).
+            3. DO NOT output the aisle names/headers. Just output the ingredients in that sorted order.
+            4. Put each completely separate ingredient on its own line.
+            5. NEVER split a single ingredient across multiple lines. "2 lbs Boneless, Skinless Salmon" MUST be on one single line.
+            6. You MAY use commas within an ingredient line.
+            7. Do not use bullet points, asterisks, or introductory text.
             
             Example output: 
-            2 lbs Ground Turkey
-            1 head Garlic, Minced
             3 Bell Peppers
+            1 head Garlic, Minced
+            1 Lemon
+            2 lbs Ground Turkey
             """
 
             if household_text:
