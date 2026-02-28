@@ -268,7 +268,6 @@ with tab1:
 with tab2:
     st.header("🛒 Smart Shopping Lists")
     
-    # 1. THE COMPILE BUTTON
     if st.button("✨ Compile AI Grocery Lists", type="primary", use_container_width=True):
         with st.spinner("Chef Gemini is clearing the old lists and organizing the aisles..."):
             
@@ -282,7 +281,6 @@ with tab2:
             groceries_ws.append_row(["List Type", "Item"])
             rows_to_add = []
 
-            # NEW: Completely locked-down AI Prompt to prevent ingredient splitting
             system_prompt = f"""
             Extract all ingredients from the following recipes. Combine quantities where possible.
             CRITICAL INSTRUCTION: The user already has these pantry items: {pantry_string}. DO NOT include them.
@@ -324,7 +322,6 @@ with tab2:
             
     st.divider()
 
-    # 2. THE RENDERED LISTS
     if not groceries_data:
         st.info("Your grocery lists are empty. Hit the big compile button to generate them!")
     else:
@@ -350,7 +347,6 @@ with tab2:
                             st.rerun()
                 st.write("---")
 
-    # 3. THE MANUAL ADD TOOL (Now permanently visible at the bottom!)
     st.subheader("➕ Add an Extra Item")
     st.write("*(Note: Compiling the AI lists will reset this tab, so add your manual items after you compile!)*")
     
@@ -452,21 +448,53 @@ with tab4:
                     fetch_all_records.clear("Recipe Vault")
                     st.rerun()
 
+# NEW: The Smart Voila Combiner is here!
 with tab5:
     st.header("🚚 Voila Delivery List")
-    st.write("Manage your weekly Sobeys order for snacks, cereal, and non-perishables here.")
+    st.write("Manage your weekly Sobeys order. Add an item, and Chef Gemini will automatically combine matching quantities!")
     
     col_vadd1, col_vadd2 = st.columns([3, 1])
     with col_vadd1:
-        new_voila = st.text_input("Add an item to your Voila list:", placeholder="e.g., Cheerios, Paper Towels...")
+        new_voila = st.text_input("Add an item to your Voila list:", placeholder="e.g., 2 boxes of Cheerios, 3 Apples...")
     with col_vadd2:
         st.write("") 
         st.write("")
-        if st.button("Add to Voila", use_container_width=True):
+        if st.button("Smart Add", use_container_width=True):
             if new_voila:
-                clean_voila = new_voila.replace("*", "").strip().title()
-                if clean_voila and clean_voila not in current_voila:
-                    voila_ws.append_row([clean_voila])
+                with st.spinner("Checking cart for duplicates to combine..."):
+                    clean_voila = new_voila.replace("*", "").strip()
+                    
+                    if not current_voila:
+                        # If the cart is empty, just add it directly
+                        voila_ws.append_row([clean_voila.title()])
+                    else:
+                        # If there is stuff in the cart, ask AI to do the math!
+                        cart_string = "\n".join(current_voila)
+                        prompt = f"""
+                        Here is my current grocery cart:
+                        {cart_string}
+                        
+                        I want to add this new item: "{clean_voila}"
+                        
+                        INSTRUCTIONS:
+                        1. If the new item is already in the cart (or is the same type of item), combine their quantities mathematically (e.g., "1 Apple" + "2 Apples" = "3 Apples").
+                        2. If the new item is NOT in the cart, simply add it to the bottom of the list.
+                        3. Format the final output as a simple, newline-separated list with NO bullet points, NO asterisks, and NO introductory text. Capitalize each item.
+                        """
+                        response = model.generate_content(prompt)
+                        
+                        # Clean up the AI's answer
+                        updated_cart = [x.strip().title().lstrip("- ").lstrip("* ") for x in response.text.split("\n") if x.strip()]
+                        
+                        # Wipe the old sheet completely clean
+                        voila_ws.clear()
+                        # Add the header back
+                        voila_ws.append_row(["Item"])
+                        # Add the newly combined list back
+                        rows_to_add = [[item] for item in updated_cart]
+                        if rows_to_add:
+                            voila_ws.append_rows(rows_to_add)
+                            
                     fetch_col_values.clear("Voila", 1)
                     st.rerun()
                 
