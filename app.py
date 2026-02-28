@@ -233,7 +233,6 @@ with tab1:
                                 if st.button("🪄 AI Sub", key=f"sub_btn_{day}_{idx}"):
                                     with st.spinner("Swapping..."):
                                         title = next((l for l in lines if "**" in l), "the recipe").replace("**", "")
-                                        # NEW: Strictly ordering the AI to swap the ingredient entirely!
                                         prompt = f"""
                                         I am cooking {title}. I need a culinary substitute for '{line}'. 
                                         You MUST provide a completely DIFFERENT ingredient (e.g., swapping chicken for tofu, or cilantro for parsley). 
@@ -332,24 +331,25 @@ with tab2:
             groceries_ws.append_row(["List Type", "Item"])
             rows_to_add = []
 
-            # NEW: We told the AI to sort the list internally without printing the aisle names!
+            # NEW: We tell the AI to use '###' as a secret code for aisle headers!
             system_prompt = f"""
             Extract all ingredients from the following recipes. Combine quantities where possible.
             CRITICAL INSTRUCTION: The user already has these pantry items: {pantry_string}. DO NOT include them.
             
             FORMATTING RULES:
             1. Output a NEWLINE-SEPARATED list. 
-            2. SORT the list by standard grocery store aisles (e.g., group all Produce together, then Meat, then Dairy).
-            3. DO NOT output the aisle names/headers. Just output the ingredients in that sorted order.
+            2. Group the items by grocery store aisles.
+            3. Before each group, add a header starting with three hashtags (e.g., ### Produce, ### Meat & Seafood).
             4. Put each completely separate ingredient on its own line.
-            5. NEVER split a single ingredient across multiple lines. "2 lbs Boneless, Skinless Salmon" MUST be on one single line.
+            5. NEVER split a single ingredient across multiple lines.
             6. You MAY use commas within an ingredient line.
             7. Do not use bullet points, asterisks, or introductory text.
             
             Example output: 
+            ### Produce
             3 Bell Peppers
             1 head Garlic, Minced
-            1 Lemon
+            ### Meat
             2 lbs Ground Turkey
             """
 
@@ -388,18 +388,25 @@ with tab2:
             if items_in_category:
                 st.subheader(category)
                 for original_index, row in items_in_category:
-                    col_g1, col_g2 = st.columns([4, 1])
-                    with col_g1:
-                        st.write(f"🛒 {row['Item']}")
-                    with col_g2:
-                        if st.button("To Pantry", key=f"buy_{original_index}"):
-                            clean_item = row['Item'].replace("*", "").strip().title()
-                            if clean_item and clean_item not in current_pantry:
-                                pantry_ws.append_row([clean_item])
-                                fetch_col_values.clear("Pantry", 1)
-                            groceries_ws.delete_rows(original_index + 2)
-                            fetch_all_records.clear("Groceries")
-                            st.rerun()
+                    item_text = str(row['Item'])
+                    
+                    # NEW: Our app reads the secret '###' code and renders a bold header instead of a button!
+                    if item_text.startswith("###"):
+                        header_name = item_text.replace("###", "").strip()
+                        st.markdown(f"<br>**🏷️ {header_name}**", unsafe_allow_html=True)
+                    else:
+                        col_g1, col_g2 = st.columns([4, 1])
+                        with col_g1:
+                            st.write(f"🛒 {item_text}")
+                        with col_g2:
+                            if st.button("To Pantry", key=f"buy_{original_index}"):
+                                clean_item = item_text.replace("*", "").strip().title()
+                                if clean_item and clean_item not in current_pantry:
+                                    pantry_ws.append_row([clean_item])
+                                    fetch_col_values.clear("Pantry", 1)
+                                groceries_ws.delete_rows(original_index + 2)
+                                fetch_all_records.clear("Groceries")
+                                st.rerun()
                 st.write("---")
 
     st.subheader("➕ Add an Extra Item")
