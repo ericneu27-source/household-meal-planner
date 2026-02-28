@@ -26,7 +26,6 @@ try:
     schedule_ws = db.worksheet("Schedule")
     pantry_ws = db.worksheet("Pantry")
     
-    # NEW: Create the Recipe Vault tab
     try:
         vault_ws = db.worksheet("Recipe Vault")
     except:
@@ -63,11 +62,16 @@ if not pantry_data:
 
 current_pantry = pantry_data[1:]
 
-# NEW: Read the Vault Data and sort by ratings
+# NEW: We are now tracking the exact "row_index" for the vault meals too!
 vault_data = vault_ws.get_all_records()
-vault_dict = {str(row["Meal Title"]): {"recipe": str(row["Recipe"]), "rating": str(row["Rating"])} for row in vault_data if row.get("Meal Title")}
+vault_dict = {
+    str(row["Meal Title"]): {
+        "recipe": str(row["Recipe"]), 
+        "rating": str(row["Rating"]), 
+        "row_index": i + 2
+    } for i, row in enumerate(vault_data) if row.get("Meal Title")
+}
 
-# AI Training Data: Separate the loved meals from the banned meals
 loved_meals = [title for title, data in vault_dict.items() if data["rating"] in ["4", "5"]]
 banned_meals = [title for title, data in vault_dict.items() if data["rating"] in ["1", "2"]]
 
@@ -108,7 +112,6 @@ with tab1:
             if details["meal"]:
                 st.write(details["meal"])
                 
-                # NEW: The Rating System built right into the schedule
                 with st.expander("⭐ Rate & Save this Meal"):
                     col_r1, col_r2 = st.columns([2, 1])
                     with col_r1:
@@ -118,7 +121,6 @@ with tab1:
                     
                     if st.button("Save to Vault", key=f"save_{day}", use_container_width=True):
                         if meal_name:
-                            # Extract just the number from the rating
                             numeric_rating = rating[0] 
                             vault_ws.append_row([meal_name, details["meal"], numeric_rating])
                             st.success(f"Saved {meal_name} with {numeric_rating} stars!")
@@ -129,8 +131,6 @@ with tab1:
                 with col_btn1:
                     if st.button(f"✨ AI Generate", key=f"btn_{day}", use_container_width=True):
                         with st.spinner(f"Chef Gemini is planning {day}..."):
-                            
-                            # NEW: The Prompt now actively uses your ratings
                             prompt = f"""
                             Suggest one high-protein dinner recipe (using chicken, fish, ground turkey, or a high-protein vegetarian base). 
                             Scale the ingredient measurements exactly to feed 3 adults and 2 children for a single meal.
@@ -260,13 +260,33 @@ with tab4:
     if not vault_dict:
         st.info("Your vault is empty. Rate meals on the Schedule tab to build your database!")
     else:
-        for i, (title, data) in enumerate(vault_dict.items()):
-            # Display stars visually
+        for title, data in vault_dict.items():
             stars = "⭐" * int(data["rating"])
             with st.expander(f"{stars} {title}"):
                 st.write("**Ingredients:**")
                 st.write(data["recipe"])
+                
+                st.divider()
+                
+                # NEW: The Rating Update Interface
+                col_u1, col_u2 = st.columns(2)
+                with col_u1:
+                    rating_options = ["5 (Love)", "4 (Like)", "3 (Okay)", "2 (Dislike)", "1 (Never Again)"]
+                    current_val = str(data["rating"])
+                    # Find which text option matches their current numerical rating to display it as default
+                    default_idx = next((i for i, opt in enumerate(rating_options) if opt.startswith(current_val)), 0)
+                    new_rating = st.selectbox("Change Rating:", rating_options, index=default_idx, key=f"edit_rate_{title}")
+                
+                with col_u2:
+                    st.write("")
+                    st.write("")
+                    if st.button("Update Rating", key=f"upd_vault_{title}", use_container_width=True):
+                        if new_rating[0] != current_val:
+                            # Column 3 is the Rating column in Google Sheets
+                            vault_ws.update_cell(data["row_index"], 3, new_rating[0])
+                            st.rerun()
+                
+                # Notice we updated the row deletion logic here to be perfectly precise using the exact row_index
                 if st.button("Delete from Vault", key=f"del_vault_{title}"):
-                    row_to_delete = i + 2
-                    vault_ws.delete_rows(row_to_delete)
+                    vault_ws.delete_rows(data["row_index"])
                     st.rerun()
