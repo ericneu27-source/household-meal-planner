@@ -8,6 +8,14 @@ import random
 # --- SETUP ---
 st.set_page_config(page_title="Household Meal Planner", page_icon="🍳", layout="centered")
 
+# NEW: Initialize Short-Term Memory for the Voila Pop-up
+if 'voila_pending' not in st.session_state:
+    st.session_state.voila_pending = False
+if 'voila_new_cart' not in st.session_state:
+    st.session_state.voila_new_cart = []
+if 'voila_item' not in st.session_state:
+    st.session_state.voila_item = ""
+
 # Securely load the AI API key
 api_key = st.secrets["GEMINI_API_KEY"]
 genai.configure(api_key=api_key)
@@ -448,55 +456,91 @@ with tab4:
                     fetch_all_records.clear("Recipe Vault")
                     st.rerun()
 
-# NEW: The Smart Voila Combiner is here!
 with tab5:
     st.header("🚚 Voila Delivery List")
     st.write("Manage your weekly Sobeys order. Add an item, and Chef Gemini will automatically combine matching quantities!")
     
-    col_vadd1, col_vadd2 = st.columns([3, 1])
-    with col_vadd1:
-        new_voila = st.text_input("Add an item to your Voila list:", placeholder="e.g., 2 boxes of Cheerios, 3 Apples...")
-    with col_vadd2:
-        st.write("") 
-        st.write("")
-        if st.button("Smart Add", use_container_width=True):
-            if new_voila:
-                with st.spinner("Checking cart for duplicates to combine..."):
-                    clean_voila = new_voila.replace("*", "").strip()
-                    
-                    if not current_voila:
-                        # If the cart is empty, just add it directly
-                        voila_ws.append_row([clean_voila.title()])
-                    else:
-                        # If there is stuff in the cart, ask AI to do the math!
-                        cart_string = "\n".join(current_voila)
-                        prompt = f"""
-                        Here is my current grocery cart:
-                        {cart_string}
+    # NEW: The duplicate detection pop-up UI
+    if st.session_state.voila_pending:
+        st.warning(f"⚠️ **Duplicate Detected!** It looks like you already have something similar to **'{st.session_state.voila_item}'** in your cart.")
+        
+        col_c1, col_c2, col_c3 = st.columns(3)
+        with col_c1:
+            if st.button("✅ Combine Them", use_container_width=True):
+                # Save the AI's combined math list
+                voila_ws.clear()
+                voila_ws.append_row(["Item"])
+                rows_to_add = [[item] for item in st.session_state.voila_new_cart]
+                if rows_to_add:
+                    voila_ws.append_rows(rows_to_add)
+                fetch_col_values.clear("Voila", 1)
+                st.session_state.voila_pending = False
+                st.rerun()
+        with col_c2:
+            if st.button("➕ Add Separately", use_container_width=True):
+                # Ignore the math and just add the raw item to the bottom
+                voila_ws.append_row([st.session_state.voila_item])
+                fetch_col_values.clear("Voila", 1)
+                st.session_state.voila_pending = False
+                st.rerun()
+        with col_c3:
+            if st.button("❌ Cancel", use_container_width=True):
+                # Forget it ever happened
+                st.session_state.voila_pending = False
+                st.rerun()
+        st.divider()
+        
+    else:
+        # Standard input box
+        col_vadd1, col_vadd2 = st.columns([3, 1])
+        with col_vadd1:
+            new_voila = st.text_input("Add an item to your Voila list:", placeholder="e.g., 2 boxes of Cheerios, 3 Apples...")
+        with col_vadd2:
+            st.write("") 
+            st.write("")
+            if st.button("Smart Add", use_container_width=True):
+                if new_voila:
+                    with st.spinner("Checking cart for duplicates..."):
+                        clean_voila = new_voila.replace("*", "").strip().title()
                         
-                        I want to add this new item: "{clean_voila}"
-                        
-                        INSTRUCTIONS:
-                        1. If the new item is already in the cart (or is the same type of item), combine their quantities mathematically (e.g., "1 Apple" + "2 Apples" = "3 Apples").
-                        2. If the new item is NOT in the cart, simply add it to the bottom of the list.
-                        3. Format the final output as a simple, newline-separated list with NO bullet points, NO asterisks, and NO introductory text. Capitalize each item.
-                        """
-                        response = model.generate_content(prompt)
-                        
-                        # Clean up the AI's answer
-                        updated_cart = [x.strip().title().lstrip("- ").lstrip("* ") for x in response.text.split("\n") if x.strip()]
-                        
-                        # Wipe the old sheet completely clean
-                        voila_ws.clear()
-                        # Add the header back
-                        voila_ws.append_row(["Item"])
-                        # Add the newly combined list back
-                        rows_to_add = [[item] for item in updated_cart]
-                        if rows_to_add:
-                            voila_ws.append_rows(rows_to_add)
+                        if not current_voila:
+                            # Empty cart, just add it
+                            voila_ws.append_row([clean_voila])
+                            fetch_col_values.clear("Voila", 1)
+                            st.rerun()
+                        else:
+                            cart_string = "\n".join(current_voila)
+                            prompt = f"""
+                            Here is my current grocery cart:
+                            {cart_string}
                             
-                    fetch_col_values.clear("Voila", 1)
-                    st.rerun()
+                            I want to add this new item: "{clean_voila}"
+                            
+                            INSTRUCTIONS:
+                            1. Does the new item match (or is it essentially the same as) an item already in the cart? Answer exactly "DUPLICATE: YES" or "DUPLICATE: NO" on the first line.
+                            2. If YES, combine their quantities mathematically. If NO, simply add the new item to the bottom of the list.
+                            3. From the second line onwards, provide the final updated cart as a newline-separated list with NO bullet points, asterisks, or extra text. Capitalize each item.
+                            """
+                            response = model.generate_content(prompt)
+                            lines = response.text.strip().split("\n")
+                            
+                            # Read the AI's first line to see if it yelled YES or NO
+                            is_duplicate = "YES" in lines[0].upper()
+                            
+                            # Grab the actual list of items
+                            updated_cart = [x.strip().title().lstrip("- ").lstrip("* ") for x in lines[1:] if x.strip()]
+                            
+                            if is_duplicate:
+                                # Trigger the pop-up memory
+                                st.session_state.voila_pending = True
+                                st.session_state.voila_item = clean_voila
+                                st.session_state.voila_new_cart = updated_cart
+                                st.rerun()
+                            else:
+                                # No duplicate, just append the raw item and go
+                                voila_ws.append_row([clean_voila])
+                                fetch_col_values.clear("Voila", 1)
+                                st.rerun()
                 
     st.divider()
     
