@@ -32,6 +32,13 @@ try:
         vault_ws = db.add_worksheet(title="Recipe Vault", rows="100", cols="3")
         vault_ws.append_row(["Meal Title", "Recipe", "Rating"])
         
+    # NEW: Create the Voila list tab
+    try:
+        voila_ws = db.worksheet("Voila")
+    except:
+        voila_ws = db.add_worksheet(title="Voila", rows="100", cols="1")
+        voila_ws.append_row(["Item"])
+        
 except Exception as e:
     st.error(f"Error connecting to Google Sheets. Check your secrets file! Details: {e}")
     st.stop()
@@ -77,6 +84,13 @@ banned_meals = [title for title, data in vault_dict.items() if data["rating"] in
 loved_str = ", ".join(loved_meals) if loved_meals else "None yet"
 banned_str = ", ".join(banned_meals) if banned_meals else "None yet"
 
+# NEW: Read the Voila Data
+voila_data = voila_ws.col_values(1)
+if not voila_data:
+    voila_ws.append_row(["Item"])
+    voila_data = voila_ws.col_values(1)
+current_voila = voila_data[1:]
+
 # --- HEADER ---
 col_h1, col_h2 = st.columns([4, 1])
 with col_h1:
@@ -90,7 +104,8 @@ with col_h2:
 st.divider()
 
 # --- TABS ---
-tab1, tab2, tab3, tab4 = st.tabs(["📅 Weekly Schedule", "🛒 Grocery Lists", "🥫 Virtual Pantry", "⭐ Recipe Vault"])
+# NEW: Added tab5 for Voila
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📅 Weekly Schedule", "🛒 Grocery Lists", "🥫 Virtual Pantry", "⭐ Recipe Vault", "🚚 Voila List"])
 
 with tab1:
     st.header("This Week's Schedule")
@@ -175,7 +190,6 @@ with tab2:
     if st.button("Compile Grocery Lists"):
         with st.spinner("Chef Gemini is organizing the aisles..."):
             
-            # --- Gathering the 3 distinct lists ---
             household_text = ""
             for day in ["Sunday", "Monday"]:
                 if schedule_dict[day]["meal"]:
@@ -193,7 +207,6 @@ with tab2:
             
             pantry_string = ", ".join(current_pantry)
 
-            # --- Household List ---
             if household_text:
                 prompt_house = f"""
                 Extract all ingredients from these recipes and combine them into a single grocery list. Group items by standard grocery store aisles. Combine quantities where possible.
@@ -208,7 +221,6 @@ with tab2:
                 
             st.divider()
             
-            # --- Cook List 1: Tues & Wed ---
             if cook_text_tues_wed:
                 prompt_cook_1 = f"""
                 Extract all ingredients from these recipes and combine them into a single grocery list. Group items by standard grocery store aisles. Combine quantities where possible.
@@ -223,7 +235,6 @@ with tab2:
                 
             st.divider()
             
-            # --- Cook List 2: Thurs & Fri ---
             if cook_text_thurs_fri:
                 prompt_cook_2 = f"""
                 Extract all ingredients from these recipes and combine them into a single grocery list. Group items by standard grocery store aisles. Combine quantities where possible.
@@ -246,7 +257,6 @@ with tab3:
         st.write("")
         if st.button("Add Item", use_container_width=True):
             if new_item:
-                # NEW: Clean out any weird characters like ** before saving to the database
                 clean_item = new_item.replace("*", "").strip().title()
                 if clean_item and clean_item not in current_pantry:
                     pantry_ws.append_row([clean_item])
@@ -261,10 +271,9 @@ with tab3:
         for i, item in enumerate(current_pantry):
             col_item1, col_item2 = st.columns([4, 1])
             with col_item1:
-                # Swapped out the bold formatting just to keep it absolutely clean and bug-free
                 st.write(f"✅ {item}")
             with col_item2:
-                if st.button("Use Up", key=f"del_{item}"):
+                if st.button("Use Up", key=f"del_pantry_{item}_{i}"):
                     row_to_delete = i + 2 
                     pantry_ws.delete_rows(row_to_delete)
                     st.rerun()
@@ -311,4 +320,38 @@ with tab4:
                 
                 if st.button("Delete from Vault", key=f"del_vault_{title}"):
                     vault_ws.delete_rows(data["row_index"])
+                    st.rerun()
+
+# NEW: Tab 5 for Voila
+with tab5:
+    st.header("🚚 Voila Delivery List")
+    st.write("Manage your weekly Sobeys order for snacks, cereal, and non-perishables here.")
+    
+    col_vadd1, col_vadd2 = st.columns([3, 1])
+    with col_vadd1:
+        new_voila = st.text_input("Add an item to your Voila list:", placeholder="e.g., Cheerios, Paper Towels...")
+    with col_vadd2:
+        st.write("") 
+        st.write("")
+        if st.button("Add to Voila", use_container_width=True):
+            if new_voila:
+                clean_voila = new_voila.replace("*", "").strip().title()
+                if clean_voila and clean_voila not in current_voila:
+                    voila_ws.append_row([clean_voila])
+                    st.rerun()
+                
+    st.divider()
+    
+    st.subheader("Current Cart")
+    if not current_voila:
+        st.info("Your Voila list is empty.")
+    else:
+        for i, item in enumerate(current_voila):
+            col_vitem1, col_vitem2 = st.columns([4, 1])
+            with col_vitem1:
+                st.write(f"📦 {item}")
+            with col_vitem2:
+                if st.button("Remove", key=f"del_voila_{item}_{i}"):
+                    row_to_delete = i + 2 
+                    voila_ws.delete_rows(row_to_delete)
                     st.rerun()
