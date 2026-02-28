@@ -22,6 +22,17 @@ def get_google_sheet():
     client = gspread.authorize(creds)
     return client.open_by_url(st.secrets["SHEET_URL"])
 
+# NEW: The App's Memory System to prevent API limits!
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_all_records(sheet_name):
+    client = get_google_sheet()
+    return client.worksheet(sheet_name).get_all_records()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_col_values(sheet_name, col_num):
+    client = get_google_sheet()
+    return client.worksheet(sheet_name).col_values(col_num)
+
 try:
     db = get_google_sheet()
     schedule_ws = db.worksheet("Schedule")
@@ -46,7 +57,6 @@ try:
         settings_ws.append_row(["Setting", "Value"])
         settings_ws.append_row(["Diet & Portions", "High-protein dinner recipes (using chicken, fish, ground turkey, or a high-protein vegetarian base). Scale all ingredient measurements to feed exactly 3 adults and 2 children for a single meal."])
 
-    # NEW: Create the Interactive Groceries tab
     try:
         groceries_ws = db.worksheet("Groceries")
     except:
@@ -57,8 +67,8 @@ except Exception as e:
     st.error(f"Error connecting to Google Sheets. Check your secrets file! Details: {e}")
     st.stop()
 
-# --- INITIALIZE OR READ DATA ---
-schedule_data = schedule_ws.get_all_records()
+# --- INITIALIZE OR READ DATA (USING THE MEMORY SYSTEM) ---
+schedule_data = fetch_all_records("Schedule")
 if not schedule_data:
     schedule_ws.append_row(["Day", "Status", "Meal"])
     defaults = [
@@ -71,19 +81,21 @@ if not schedule_data:
         ["Sunday", "Cook at Home", ""]
     ]
     schedule_ws.append_rows(defaults)
-    schedule_data = schedule_ws.get_all_records()
+    fetch_all_records.clear("Schedule")
+    schedule_data = fetch_all_records("Schedule")
 
 schedule_dict = {row["Day"]: {"status": row["Status"], "meal": row["Meal"], "row_index": i + 2} for i, row in enumerate(schedule_data)}
 
-pantry_data = pantry_ws.col_values(1)
+pantry_data = fetch_col_values("Pantry", 1)
 if not pantry_data:
     pantry_ws.append_row(["Item"])
     pantry_ws.append_rows([["Olive Oil"], ["Salt"], ["Black Pepper"], ["Garlic Powder"]])
-    pantry_data = pantry_ws.col_values(1)
+    fetch_col_values.clear("Pantry", 1)
+    pantry_data = fetch_col_values("Pantry", 1)
 
 current_pantry = pantry_data[1:]
 
-vault_data = vault_ws.get_all_records()
+vault_data = fetch_all_records("Recipe Vault")
 vault_dict = {
     str(row["Meal Title"]): {
         "recipe": str(row["Recipe"]), 
@@ -97,20 +109,20 @@ banned_meals = [title for title, data in vault_dict.items() if data["rating"] in
 loved_str = ", ".join(loved_meals) if loved_meals else "None yet"
 banned_str = ", ".join(banned_meals) if banned_meals else "None yet"
 
-voila_data = voila_ws.col_values(1)
+voila_data = fetch_col_values("Voila", 1)
 if not voila_data:
     voila_ws.append_row(["Item"])
-    voila_data = voila_ws.col_values(1)
+    fetch_col_values.clear("Voila", 1)
+    voila_data = fetch_col_values("Voila", 1)
 current_voila = voila_data[1:]
 
-settings_data = settings_ws.get_all_records()
+settings_data = fetch_all_records("Settings")
 diet_prefs = "High-protein recipes."
 for row in settings_data:
     if row.get("Setting") == "Diet & Portions":
         diet_prefs = str(row.get("Value"))
 
-# NEW: Read the Groceries Data
-groceries_data = groceries_ws.get_all_records()
+groceries_data = fetch_all_records("Groceries")
 
 # --- HEADER ---
 col_h1, col_h2 = st.columns([4, 1])
@@ -119,6 +131,9 @@ with col_h1:
 with col_h2:
     st.write("") 
     if st.button("🔄 Sync App", use_container_width=True):
+        # Manually clear all memory to get fresh data
+        fetch_all_records.clear()
+        fetch_col_values.clear()
         st.rerun()
         
 st.divider()
@@ -167,7 +182,8 @@ with tab1:
             for day, meal_text in new_meals.items():
                 if day in schedule_dict:
                     schedule_ws.update_cell(schedule_dict[day]["row_index"], 3, meal_text)
-                    
+            
+            fetch_all_records.clear("Schedule")
             st.rerun()
 
     st.write("---")
@@ -195,6 +211,7 @@ with tab1:
                     if st.button("Save Edits", key=f"save_edit_{day}", use_container_width=True):
                         if edited_recipe != details["meal"]:
                             schedule_ws.update_cell(details["row_index"], 3, edited_recipe)
+                            fetch_all_records.clear("Schedule")
                             st.rerun()
                 
                 with st.expander("⭐ Rate & Save this Meal"):
@@ -208,6 +225,7 @@ with tab1:
                         if meal_name:
                             numeric_rating = rating[0] 
                             vault_ws.append_row([meal_name, edited_recipe, numeric_rating])
+                            fetch_all_records.clear("Recipe Vault")
                             st.success(f"Saved {meal_name} with {numeric_rating} stars!")
                             st.rerun()
             
@@ -232,6 +250,7 @@ with tab1:
                             """
                             response = model.generate_content(prompt)
                             schedule_ws.update_cell(details["row_index"], 3, response.text)
+                            fetch_all_records.clear("Schedule")
                             st.rerun()
                 
                 with col_btn2:
@@ -242,6 +261,7 @@ with tab1:
                         if selected_fav != "-- Pick from Vault --":
                             formatted_fav = f"**{selected_fav}**\n*(Vault Rating: {vault_dict[selected_fav]['rating']} Stars)*\n\n**Ingredients needed:**\n{vault_dict[selected_fav]['recipe']}"
                             schedule_ws.update_cell(details["row_index"], 3, formatted_fav)
+                            fetch_all_records.clear("Schedule")
                             st.rerun()
                     else:
                         st.write("*(Rate meals to build Vault)*")
@@ -250,7 +270,6 @@ with tab1:
 with tab2:
     st.header("🛒 Smart Shopping Lists")
     
-    # NEW: The compile button now builds a database table of ingredients
     if st.button("✨ Compile & Sync New Grocery Lists", type="primary", use_container_width=True):
         with st.spinner("Chef Gemini is clearing the old lists and organizing the aisles..."):
             
@@ -260,12 +279,10 @@ with tab2:
             
             pantry_string = ", ".join(current_pantry)
             
-            # Wipe the old lists out of the Google Sheet cleanly
             groceries_ws.clear()
             groceries_ws.append_row(["List Type", "Item"])
             rows_to_add = []
 
-            # Master Prompt format for easy Python reading
             system_prompt = f"""
             Extract all ingredients from the following recipes. Combine quantities where possible.
             CRITICAL INSTRUCTION: The user already has these pantry items: {pantry_string}. DO NOT include them.
@@ -289,22 +306,20 @@ with tab2:
                 rows_to_add.extend([["🧑‍🍳 Cook List 2 (Thurs/Fri)", item] for item in items])
                 
             if rows_to_add:
-                # Add all new items to the Google Sheet at once (extremely fast)
                 groceries_ws.append_rows(rows_to_add)
             
+            fetch_all_records.clear("Groceries")
             st.success("Lists successfully generated and synced to all devices!")
             st.rerun()
             
     st.divider()
 
-    # NEW: Displaying the Interactive Lists
     if not groceries_data:
         st.info("Your grocery lists are empty. Hit the big compile button to generate them!")
     else:
         list_categories = ["🏡 Household (Sun/Mon)", "🧑‍🍳 Cook List 1 (Tues/Wed)", "🧑‍🍳 Cook List 2 (Thurs/Fri)"]
         
         for category in list_categories:
-            # Find all items that belong to this specific shopping trip
             items_in_category = [(i, row) for i, row in enumerate(groceries_data) if row["List Type"] == category]
             
             if items_in_category:
@@ -315,13 +330,12 @@ with tab2:
                         st.write(f"🛒 {row['Item']}")
                     with col_g2:
                         if st.button("To Pantry", key=f"buy_{original_index}"):
-                            # 1. Clean the item name
                             clean_item = row['Item'].replace("*", "").strip().title()
-                            # 2. Add it to the Pantry if it isn't already there
                             if clean_item and clean_item not in current_pantry:
                                 pantry_ws.append_row([clean_item])
-                            # 3. Delete it from the active Grocery List
+                                fetch_col_values.clear("Pantry", 1)
                             groceries_ws.delete_rows(original_index + 2)
+                            fetch_all_records.clear("Groceries")
                             st.rerun()
                 st.write("---")
 
@@ -338,6 +352,7 @@ with tab3:
                 clean_item = new_item.replace("*", "").strip().title()
                 if clean_item and clean_item not in current_pantry:
                     pantry_ws.append_row([clean_item])
+                    fetch_col_values.clear("Pantry", 1)
                     st.rerun()
                 
     st.divider()
@@ -354,6 +369,7 @@ with tab3:
                 if st.button("Use Up", key=f"del_pantry_{item}_{i}"):
                     row_to_delete = i + 2 
                     pantry_ws.delete_rows(row_to_delete)
+                    fetch_col_values.clear("Pantry", 1)
                     st.rerun()
 
 with tab4:
@@ -366,6 +382,7 @@ with tab4:
         if st.button("Save 5-Star Favorite", use_container_width=True):
             if new_title and new_recipe:
                 vault_ws.append_row([new_title, new_recipe, "5"])
+                fetch_all_records.clear("Recipe Vault")
                 st.rerun()
                 
     st.divider()
@@ -382,6 +399,7 @@ with tab4:
                 if st.button("Save Portion Edits", key=f"save_portion_{title}"):
                     if edited_vault_recipe != data["recipe"]:
                         vault_ws.update_cell(data["row_index"], 2, edited_vault_recipe)
+                        fetch_all_records.clear("Recipe Vault")
                         st.rerun()
                 
                 st.divider()
@@ -397,10 +415,12 @@ with tab4:
                     if st.button("Update Rating", key=f"upd_vault_{title}", use_container_width=True):
                         if new_rating[0] != current_val:
                             vault_ws.update_cell(data["row_index"], 3, new_rating[0])
+                            fetch_all_records.clear("Recipe Vault")
                             st.rerun()
                 
                 if st.button("Delete from Vault", key=f"del_vault_{title}"):
                     vault_ws.delete_rows(data["row_index"])
+                    fetch_all_records.clear("Recipe Vault")
                     st.rerun()
 
 with tab5:
@@ -418,6 +438,7 @@ with tab5:
                 clean_voila = new_voila.replace("*", "").strip().title()
                 if clean_voila and clean_voila not in current_voila:
                     voila_ws.append_row([clean_voila])
+                    fetch_col_values.clear("Voila", 1)
                     st.rerun()
                 
     st.divider()
@@ -434,6 +455,7 @@ with tab5:
                 if st.button("Remove", key=f"del_voila_{item}_{i}"):
                     row_to_delete = i + 2 
                     voila_ws.delete_rows(row_to_delete)
+                    fetch_col_values.clear("Voila", 1)
                     st.rerun()
 
 with tab6:
@@ -445,5 +467,6 @@ with tab6:
     if st.button("Save Settings", type="primary"):
         if new_diet_prefs != diet_prefs:
             settings_ws.update_cell(2, 2, new_diet_prefs)
+            fetch_all_records.clear("Settings")
             st.success("Settings saved! Chef Gemini will use these rules for all future meals.")
             st.rerun()
