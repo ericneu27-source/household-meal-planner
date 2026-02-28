@@ -32,7 +32,6 @@ try:
         vault_ws = db.add_worksheet(title="Recipe Vault", rows="100", cols="3")
         vault_ws.append_row(["Meal Title", "Recipe", "Rating"])
         
-    # NEW: Create the Voila list tab
     try:
         voila_ws = db.worksheet("Voila")
     except:
@@ -84,7 +83,6 @@ banned_meals = [title for title, data in vault_dict.items() if data["rating"] in
 loved_str = ", ".join(loved_meals) if loved_meals else "None yet"
 banned_str = ", ".join(banned_meals) if banned_meals else "None yet"
 
-# NEW: Read the Voila Data
 voila_data = voila_ws.col_values(1)
 if not voila_data:
     voila_ws.append_row(["Item"])
@@ -104,7 +102,6 @@ with col_h2:
 st.divider()
 
 # --- TABS ---
-# NEW: Added tab5 for Voila
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📅 Weekly Schedule", "🛒 Grocery Lists", "🥫 Virtual Pantry", "⭐ Recipe Vault", "🚚 Voila List"])
 
 with tab1:
@@ -298,8 +295,16 @@ with tab4:
         for title, data in vault_dict.items():
             stars = "⭐" * int(data["rating"])
             with st.expander(f"{stars} {title}"):
-                st.write("**Ingredients:**")
-                st.write(data["recipe"])
+                
+                # NEW: Editable portion/ingredients box for vault meals!
+                st.write("**Ingredients / Portions:**")
+                edited_vault_recipe = st.text_area("Adjust portions here so future uses are perfectly scaled:", value=data["recipe"], height=150, key=f"edit_vault_{title}")
+                
+                if st.button("Save Portion Edits", key=f"save_portion_{title}"):
+                    if edited_vault_recipe != data["recipe"]:
+                        # Column 2 is the "Recipe" column in the Google Sheet
+                        vault_ws.update_cell(data["row_index"], 2, edited_vault_recipe)
+                        st.rerun()
                 
                 st.divider()
                 
@@ -322,7 +327,6 @@ with tab4:
                     vault_ws.delete_rows(data["row_index"])
                     st.rerun()
 
-# NEW: Tab 5 for Voila
 with tab5:
     st.header("🚚 Voila Delivery List")
     st.write("Manage your weekly Sobeys order for snacks, cereal, and non-perishables here.")
