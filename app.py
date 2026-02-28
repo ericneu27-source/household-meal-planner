@@ -25,6 +25,14 @@ try:
     db = get_google_sheet()
     schedule_ws = db.worksheet("Schedule")
     pantry_ws = db.worksheet("Pantry")
+    
+    # NEW: Create the Recipe Vault tab
+    try:
+        vault_ws = db.worksheet("Recipe Vault")
+    except:
+        vault_ws = db.add_worksheet(title="Recipe Vault", rows="100", cols="3")
+        vault_ws.append_row(["Meal Title", "Recipe", "Rating"])
+        
 except Exception as e:
     st.error(f"Error connecting to Google Sheets. Check your secrets file! Details: {e}")
     st.stop()
@@ -55,6 +63,17 @@ if not pantry_data:
 
 current_pantry = pantry_data[1:]
 
+# NEW: Read the Vault Data and sort by ratings
+vault_data = vault_ws.get_all_records()
+vault_dict = {str(row["Meal Title"]): {"recipe": str(row["Recipe"]), "rating": str(row["Rating"])} for row in vault_data if row.get("Meal Title")}
+
+# AI Training Data: Separate the loved meals from the banned meals
+loved_meals = [title for title, data in vault_dict.items() if data["rating"] in ["4", "5"]]
+banned_meals = [title for title, data in vault_dict.items() if data["rating"] in ["1", "2"]]
+
+loved_str = ", ".join(loved_meals) if loved_meals else "None yet"
+banned_str = ", ".join(banned_meals) if banned_meals else "None yet"
+
 # --- HEADER ---
 col_h1, col_h2 = st.columns([4, 1])
 with col_h1:
@@ -68,7 +87,7 @@ with col_h2:
 st.divider()
 
 # --- TABS ---
-tab1, tab2, tab3 = st.tabs(["📅 Weekly Schedule", "🛒 Grocery Lists", "🥫 Virtual Pantry"])
+tab1, tab2, tab3, tab4 = st.tabs(["📅 Weekly Schedule", "🛒 Grocery Lists", "🥫 Virtual Pantry", "⭐ Recipe Vault"])
 
 with tab1:
     st.header("This Week's Schedule")
@@ -88,25 +107,61 @@ with tab1:
             
             if details["meal"]:
                 st.write(details["meal"])
+                
+                # NEW: The Rating System built right into the schedule
+                with st.expander("⭐ Rate & Save this Meal"):
+                    col_r1, col_r2 = st.columns([2, 1])
+                    with col_r1:
+                        meal_name = st.text_input("Name this meal:", key=f"name_{day}")
+                    with col_r2:
+                        rating = st.selectbox("Rating:", ["5 (Love)", "4 (Like)", "3 (Okay)", "2 (Dislike)", "1 (Never Again)"], key=f"rate_{day}")
+                    
+                    if st.button("Save to Vault", key=f"save_{day}", use_container_width=True):
+                        if meal_name:
+                            # Extract just the number from the rating
+                            numeric_rating = rating[0] 
+                            vault_ws.append_row([meal_name, details["meal"], numeric_rating])
+                            st.success(f"Saved {meal_name} with {numeric_rating} stars!")
+                            st.rerun()
             
             if "Flexible" not in details["status"]:
-                if st.button(f"Generate Recipe for {day}", key=f"btn_{day}"):
-                    with st.spinner(f"Chef Gemini is planning {day}..."):
-                        prompt = f"""
-                        Suggest one high-protein dinner recipe (using chicken, fish, ground turkey, or a high-protein vegetarian base). 
-                        It must be easy to cook. 
-                        Scale the ingredient measurements exactly to feed 3 adults and 2 children for a single meal.
+                col_btn1, col_btn2 = st.columns(2)
+                with col_btn1:
+                    if st.button(f"✨ AI Generate", key=f"btn_{day}", use_container_width=True):
+                        with st.spinner(f"Chef Gemini is planning {day}..."):
+                            
+                            # NEW: The Prompt now actively uses your ratings
+                            prompt = f"""
+                            Suggest one high-protein dinner recipe (using chicken, fish, ground turkey, or a high-protein vegetarian base). 
+                            Scale the ingredient measurements exactly to feed 3 adults and 2 children for a single meal.
+                            
+                            CRITICAL PREFERENCES:
+                            - Your goal is to suggest highly rated meals frequently. 
+                            - Here are the family's 4 and 5-star meals. You are highly encouraged to suggest one of these, or a very close variation: {loved_str}
+                            - Here are the family's 1 and 2-star meals. DO NOT suggest these or anything similar: {banned_str}
+                            
+                            Format your response exactly like this:
+                            **[Recipe Title]**
+                            *Brief 1-sentence description.*
+                            
+                            **Ingredients needed:**
+                            (Provide a simple bulleted list with quantities)
+                            """
+                            response = model.generate_content(prompt)
+                            schedule_ws.update_cell(details["row_index"], 3, response.text)
+                            st.rerun()
+                
+                with col_btn2:
+                    if vault_dict:
+                        fav_options = ["-- Pick from Vault --"] + list(vault_dict.keys())
+                        selected_fav = st.selectbox("Or choose from Vault:", fav_options, key=f"sel_{day}", label_visibility="collapsed")
                         
-                        Format your response exactly like this:
-                        **[Recipe Title]**
-                        *Brief 1-sentence description.*
-                        
-                        **Ingredients needed:**
-                        (Provide a simple bulleted list with quantities)
-                        """
-                        response = model.generate_content(prompt)
-                        schedule_ws.update_cell(details["row_index"], 3, response.text)
-                        st.rerun()
+                        if selected_fav != "-- Pick from Vault --":
+                            formatted_fav = f"**{selected_fav}**\n*(Vault Rating: {vault_dict[selected_fav]['rating']} Stars)*\n\n**Ingredients needed:**\n{vault_dict[selected_fav]['recipe']}"
+                            schedule_ws.update_cell(details["row_index"], 3, formatted_fav)
+                            st.rerun()
+                    else:
+                        st.write("*(Rate meals to build Vault)*")
         st.divider()
 
 with tab2:
@@ -131,7 +186,7 @@ with tab2:
                 Group the items by standard grocery store aisles. Combine quantities where possible.
                 
                 CRITICAL INSTRUCTION: Here is the user's current pantry inventory: {pantry_string}.
-                Do NOT include these pantry items in the final shopping list, as they already have them at home.
+                Do NOT include these pantry items in the final shopping list.
                 
                 Format it as a clean checklist.
                 Recipes:\n{household_text}
@@ -149,7 +204,7 @@ with tab2:
                 Group the items by standard grocery store aisles. Combine quantities where possible.
                 
                 CRITICAL INSTRUCTION: Here is the user's current pantry inventory: {pantry_string}.
-                Do NOT include these pantry items in the final shopping list, as they already have them at home.
+                Do NOT include these pantry items in the final shopping list.
                 
                 Format it as a clean checklist.
                 Recipes:\n{cook_text}
@@ -161,8 +216,6 @@ with tab2:
 
 with tab3:
     st.header("🥫 Virtual Pantry")
-    st.write("Slowly build your inventory. Add staples you already have so you don't over-buy.")
-    
     col_add1, col_add2 = st.columns([3, 1])
     with col_add1:
         new_item = st.text_input("Add a staple to your pantry:", placeholder="e.g., Soy Sauce, Rice...")
@@ -188,4 +241,32 @@ with tab3:
                 if st.button("Use Up", key=f"del_{item}"):
                     row_to_delete = i + 2 
                     pantry_ws.delete_rows(row_to_delete)
+                    st.rerun()
+
+with tab4:
+    st.header("⭐ Recipe Vault")
+    st.write("Your historical ratings inform the AI. 4 and 5-star meals will be suggested often. 1 and 2-star meals are banned.")
+    
+    with st.expander("➕ Manually Add a Known Favorite"):
+        new_title = st.text_input("Meal Name", placeholder="e.g., Turkey Chili")
+        new_recipe = st.text_area("Ingredients (List quantities for the Grocery Compiler!)", placeholder="- 1 lb Ground Turkey\n- 1 can Kidney Beans\n...")
+        if st.button("Save 5-Star Favorite", use_container_width=True):
+            if new_title and new_recipe:
+                vault_ws.append_row([new_title, new_recipe, "5"])
+                st.rerun()
+                
+    st.divider()
+    
+    if not vault_dict:
+        st.info("Your vault is empty. Rate meals on the Schedule tab to build your database!")
+    else:
+        for i, (title, data) in enumerate(vault_dict.items()):
+            # Display stars visually
+            stars = "⭐" * int(data["rating"])
+            with st.expander(f"{stars} {title}"):
+                st.write("**Ingredients:**")
+                st.write(data["recipe"])
+                if st.button("Delete from Vault", key=f"del_vault_{title}"):
+                    row_to_delete = i + 2
+                    vault_ws.delete_rows(row_to_delete)
                     st.rerun()
