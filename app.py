@@ -3,6 +3,7 @@ import google.generativeai as genai
 import gspread
 from google.oauth2.service_account import Credentials
 import json
+import random
 
 # --- SETUP ---
 st.set_page_config(page_title="Household Meal Planner", page_icon="🍳", layout="centered")
@@ -38,6 +39,14 @@ try:
         voila_ws = db.add_worksheet(title="Voila", rows="100", cols="1")
         voila_ws.append_row(["Item"])
         
+    # NEW: Create the Settings tab
+    try:
+        settings_ws = db.worksheet("Settings")
+    except:
+        settings_ws = db.add_worksheet(title="Settings", rows="10", cols="2")
+        settings_ws.append_row(["Setting", "Value"])
+        settings_ws.append_row(["Diet & Portions", "High-protein dinner recipes (using chicken, fish, ground turkey, or a high-protein vegetarian base). Scale all ingredient measurements to feed exactly 3 adults and 2 children for a single meal."])
+
 except Exception as e:
     st.error(f"Error connecting to Google Sheets. Check your secrets file! Details: {e}")
     st.stop()
@@ -79,7 +88,6 @@ vault_dict = {
 
 loved_meals = [title for title, data in vault_dict.items() if data["rating"] in ["4", "5"]]
 banned_meals = [title for title, data in vault_dict.items() if data["rating"] in ["1", "2"]]
-
 loved_str = ", ".join(loved_meals) if loved_meals else "None yet"
 banned_str = ", ".join(banned_meals) if banned_meals else "None yet"
 
@@ -89,11 +97,17 @@ if not voila_data:
     voila_data = voila_ws.col_values(1)
 current_voila = voila_data[1:]
 
+# NEW: Read Settings Data
+settings_data = settings_ws.get_all_records()
+diet_prefs = "High-protein recipes."
+for row in settings_data:
+    if row.get("Setting") == "Diet & Portions":
+        diet_prefs = str(row.get("Value"))
+
 # --- HEADER ---
 col_h1, col_h2 = st.columns([4, 1])
 with col_h1:
-    st.title("🍳 Household Meal & Grocery Planner")
-    st.markdown("*Configured for: 3 Adults, 2 Children | Cook Days: Tues & Thurs*")
+    st.title("🍳 Household Meal Planner")
 with col_h2:
     st.write("") 
     if st.button("🔄 Sync App", use_container_width=True):
@@ -102,9 +116,67 @@ with col_h2:
 st.divider()
 
 # --- TABS ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📅 Weekly Schedule", "🛒 Grocery Lists", "🥫 Virtual Pantry", "⭐ Recipe Vault", "🚚 Voila List"])
+# NEW: Added tab6 for Settings
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📅 Schedule", "🛒 Groceries", "🥫 Pantry", "⭐ Vault", "🚚 Voila", "⚙️ Settings"])
 
 with tab1:
+    # NEW: The Magic Week Button
+    if st.button("✨ Auto-Fill Magic Week", type="primary", use_container_width=True):
+        with st.spinner("Chef Gemini is designing your perfect week (this takes about 10 seconds)..."):
+            
+            prep_days = ["Sunday", "Monday", "Tuesday", "Thursday"]
+            new_meals = {}
+            
+            # Pick up to 2 random favorites from the vault
+            chosen_favs = random.sample(loved_meals, min(2, len(loved_meals)))
+            
+            # Shuffle the days so the favorites don't always land on Sunday/Monday
+            random.shuffle(prep_days)
+            fav_days = prep_days[:len(chosen_favs)]
+            ai_days = prep_days[len(chosen_favs):]
+            
+            # 1. Populate the Favorites
+            for i, day in enumerate(fav_days):
+                fav_title = chosen_favs[i]
+                fav_data = vault_dict[fav_title]
+                new_meals[day] = f"**{fav_title}**\n*(Vault Rating: {fav_data['rating']} Stars)*\n\n**Ingredients needed:**\n{fav_data['recipe']}"
+            
+            # 2. Generate AI meals for the remaining days using your Custom Settings
+            for day in ai_days:
+                prompt = f"""
+                Suggest a dinner recipe based EXACTLY on these family preferences: {diet_prefs}.
+                
+                CRITICAL INSTRUCTIONS:
+                - Do NOT suggest these 1 and 2-star banned meals: {banned_str}
+                - Provide a fresh, creative idea.
+                
+                Format your response exactly like this:
+                **[Recipe Title]**
+                *Brief 1-sentence description.*
+                
+                **Ingredients needed:**
+                (Provide a simple bulleted list with quantities)
+                """
+                response = model.generate_content(prompt)
+                new_meals[day] = response.text
+                
+            # 3. Handle the Cook's leftovers for Wed and Fri
+            tues_title = new_meals.get("Tuesday", "Tuesday's Meal").split("\n")[0].replace("**", "")
+            thurs_title = new_meals.get("Thursday", "Thursday's Meal").split("\n")[0].replace("**", "")
+            
+            new_meals["Wednesday"] = f"**Warm-Up:**\nLeftovers from {tues_title}"
+            new_meals["Friday"] = f"**Warm-Up:**\nLeftovers from {thurs_title}"
+            new_meals["Saturday"] = "**Flexible / Clean out the fridge!**"
+            
+            # 4. Save everything to Google Sheets
+            for day, meal_text in new_meals.items():
+                if day in schedule_dict:
+                    schedule_ws.update_cell(schedule_dict[day]["row_index"], 3, meal_text)
+                    
+            st.rerun()
+
+    st.write("---")
+    
     st.header("This Week's Schedule")
     for day, details in schedule_dict.items():
         col1, col2 = st.columns([1, 3])
@@ -124,7 +196,7 @@ with tab1:
                 st.write(details["meal"])
                 
                 with st.expander("✏️ Modify Recipe / Ingredients"):
-                    edited_recipe = st.text_area("Make your changes here (the Grocery List will use your updated version!):", value=details["meal"], height=200, key=f"edit_recipe_{day}")
+                    edited_recipe = st.text_area("Make your changes here:", value=details["meal"], height=200, key=f"edit_recipe_{day}")
                     if st.button("Save Edits", key=f"save_edit_{day}", use_container_width=True):
                         if edited_recipe != details["meal"]:
                             schedule_ws.update_cell(details["row_index"], 3, edited_recipe)
@@ -147,16 +219,15 @@ with tab1:
             if "Flexible" not in details["status"]:
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
-                    if st.button(f"✨ AI Generate", key=f"btn_{day}", use_container_width=True):
+                    if st.button(f"✨ Single Generate", key=f"btn_{day}", use_container_width=True):
                         with st.spinner(f"Chef Gemini is planning {day}..."):
+                            # The single generate prompt now also uses your Settings!
                             prompt = f"""
-                            Suggest one high-protein dinner recipe (using chicken, fish, ground turkey, or a high-protein vegetarian base). 
-                            Scale the ingredient measurements exactly to feed 3 adults and 2 children for a single meal.
+                            Suggest a dinner recipe based EXACTLY on these family preferences: {diet_prefs}.
                             
-                            CRITICAL PREFERENCES:
-                            - Your goal is to suggest highly rated meals frequently. 
+                            CRITICAL INSTRUCTIONS:
                             - Here are the family's 4 and 5-star meals. You are highly encouraged to suggest one of these, or a very close variation: {loved_str}
-                            - Here are the family's 1 and 2-star meals. DO NOT suggest these or anything similar: {banned_str}
+                            - Do NOT suggest these 1 and 2-star banned meals: {banned_str}
                             
                             Format your response exactly like this:
                             **[Recipe Title]**
@@ -295,26 +366,21 @@ with tab4:
         for title, data in vault_dict.items():
             stars = "⭐" * int(data["rating"])
             with st.expander(f"{stars} {title}"):
-                
-                # NEW: Editable portion/ingredients box for vault meals!
                 st.write("**Ingredients / Portions:**")
                 edited_vault_recipe = st.text_area("Adjust portions here so future uses are perfectly scaled:", value=data["recipe"], height=150, key=f"edit_vault_{title}")
                 
                 if st.button("Save Portion Edits", key=f"save_portion_{title}"):
                     if edited_vault_recipe != data["recipe"]:
-                        # Column 2 is the "Recipe" column in the Google Sheet
                         vault_ws.update_cell(data["row_index"], 2, edited_vault_recipe)
                         st.rerun()
                 
                 st.divider()
-                
                 col_u1, col_u2 = st.columns(2)
                 with col_u1:
                     rating_options = ["5 (Love)", "4 (Like)", "3 (Okay)", "2 (Dislike)", "1 (Never Again)"]
                     current_val = str(data["rating"])
                     default_idx = next((i for i, opt in enumerate(rating_options) if opt.startswith(current_val)), 0)
                     new_rating = st.selectbox("Change Rating:", rating_options, index=default_idx, key=f"edit_rate_{title}")
-                
                 with col_u2:
                     st.write("")
                     st.write("")
@@ -359,3 +425,17 @@ with tab5:
                     row_to_delete = i + 2 
                     voila_ws.delete_rows(row_to_delete)
                     st.rerun()
+
+# NEW: Tab 6 for Global Settings
+with tab6:
+    st.header("⚙️ App Settings")
+    st.write("Tell Chef Gemini exactly how to cook for your family. Update this anytime your diet or portion sizes change!")
+    
+    new_diet_prefs = st.text_area("Dietary Preferences & Portion Rules:", value=diet_prefs, height=150)
+    
+    if st.button("Save Settings", type="primary"):
+        if new_diet_prefs != diet_prefs:
+            # Row 2, Column 2 is where the value lives in the Settings tab
+            settings_ws.update_cell(2, 2, new_diet_prefs)
+            st.success("Settings saved! Chef Gemini will use these rules for all future meals.")
+            st.rerun()
