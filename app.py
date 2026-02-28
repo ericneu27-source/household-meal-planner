@@ -39,7 +39,6 @@ try:
         voila_ws = db.add_worksheet(title="Voila", rows="100", cols="1")
         voila_ws.append_row(["Item"])
         
-    # NEW: Create the Settings tab
     try:
         settings_ws = db.worksheet("Settings")
     except:
@@ -55,12 +54,13 @@ except Exception as e:
 schedule_data = schedule_ws.get_all_records()
 if not schedule_data:
     schedule_ws.append_row(["Day", "Status", "Meal"])
+    # Updated the default text to reflect the cook making two separate meals
     defaults = [
         ["Monday", "Cook at Home", ""],
-        ["Tuesday", "Cook Day (Prep for Tues & Wed)", ""],
-        ["Wednesday", "Warm-Up (Prepped on Tues)", ""],
-        ["Thursday", "Cook Day (Prep for Thurs & Fri)", ""],
-        ["Friday", "Warm-Up (Prepped on Thurs)", ""],
+        ["Tuesday", "Cook Day 1 (Makes Tues & Wed meals)", ""],
+        ["Wednesday", "Prepped on Tuesday", ""],
+        ["Thursday", "Cook Day 2 (Makes Thurs & Fri meals)", ""],
+        ["Friday", "Prepped on Thursday", ""],
         ["Saturday", "Leftovers / Flexible", ""],
         ["Sunday", "Cook at Home", ""]
     ]
@@ -97,7 +97,6 @@ if not voila_data:
     voila_data = voila_ws.col_values(1)
 current_voila = voila_data[1:]
 
-# NEW: Read Settings Data
 settings_data = settings_ws.get_all_records()
 diet_prefs = "High-protein recipes."
 for row in settings_data:
@@ -116,21 +115,18 @@ with col_h2:
 st.divider()
 
 # --- TABS ---
-# NEW: Added tab6 for Settings
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📅 Schedule", "🛒 Groceries", "🥫 Pantry", "⭐ Vault", "🚚 Voila", "⚙️ Settings"])
 
 with tab1:
-    # NEW: The Magic Week Button
     if st.button("✨ Auto-Fill Magic Week", type="primary", use_container_width=True):
         with st.spinner("Chef Gemini is designing your perfect week (this takes about 10 seconds)..."):
             
-            prep_days = ["Sunday", "Monday", "Tuesday", "Thursday"]
+            # NEW: We added Wednesday and Friday to the list of days that get fresh recipes
+            prep_days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
             new_meals = {}
             
-            # Pick up to 2 random favorites from the vault
             chosen_favs = random.sample(loved_meals, min(2, len(loved_meals)))
             
-            # Shuffle the days so the favorites don't always land on Sunday/Monday
             random.shuffle(prep_days)
             fav_days = prep_days[:len(chosen_favs)]
             ai_days = prep_days[len(chosen_favs):]
@@ -141,7 +137,7 @@ with tab1:
                 fav_data = vault_dict[fav_title]
                 new_meals[day] = f"**{fav_title}**\n*(Vault Rating: {fav_data['rating']} Stars)*\n\n**Ingredients needed:**\n{fav_data['recipe']}"
             
-            # 2. Generate AI meals for the remaining days using your Custom Settings
+            # 2. Generate AI meals for ALL 6 remaining days
             for day in ai_days:
                 prompt = f"""
                 Suggest a dinner recipe based EXACTLY on these family preferences: {diet_prefs}.
@@ -160,12 +156,7 @@ with tab1:
                 response = model.generate_content(prompt)
                 new_meals[day] = response.text
                 
-            # 3. Handle the Cook's leftovers for Wed and Fri
-            tues_title = new_meals.get("Tuesday", "Tuesday's Meal").split("\n")[0].replace("**", "")
-            thurs_title = new_meals.get("Thursday", "Thursday's Meal").split("\n")[0].replace("**", "")
-            
-            new_meals["Wednesday"] = f"**Warm-Up:**\nLeftovers from {tues_title}"
-            new_meals["Friday"] = f"**Warm-Up:**\nLeftovers from {thurs_title}"
+            # 3. Handle Saturday (Leftovers day!)
             new_meals["Saturday"] = "**Flexible / Clean out the fridge!**"
             
             # 4. Save everything to Google Sheets
@@ -185,7 +176,7 @@ with tab1:
         with col2:
             if "Cook Day" in details["status"]:
                 st.info(f"🧑‍🍳 **{details['status']}**")
-            elif "Warm-Up" in details["status"]:
+            elif "Warm-Up" in details["status"] or "Prepped" in details["status"]:
                 st.warning(f"♨️ **{details['status']}**")
             elif "Flexible" in details["status"]:
                 st.error(f"🥡 **{details['status']}**")
@@ -221,7 +212,6 @@ with tab1:
                 with col_btn1:
                     if st.button(f"✨ Single Generate", key=f"btn_{day}", use_container_width=True):
                         with st.spinner(f"Chef Gemini is planning {day}..."):
-                            # The single generate prompt now also uses your Settings!
                             prompt = f"""
                             Suggest a dinner recipe based EXACTLY on these family preferences: {diet_prefs}.
                             
@@ -426,7 +416,6 @@ with tab5:
                     voila_ws.delete_rows(row_to_delete)
                     st.rerun()
 
-# NEW: Tab 6 for Global Settings
 with tab6:
     st.header("⚙️ App Settings")
     st.write("Tell Chef Gemini exactly how to cook for your family. Update this anytime your diet or portion sizes change!")
@@ -435,7 +424,6 @@ with tab6:
     
     if st.button("Save Settings", type="primary"):
         if new_diet_prefs != diet_prefs:
-            # Row 2, Column 2 is where the value lives in the Settings tab
             settings_ws.update_cell(2, 2, new_diet_prefs)
             st.success("Settings saved! Chef Gemini will use these rules for all future meals.")
             st.rerun()
