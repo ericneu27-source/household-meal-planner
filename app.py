@@ -22,7 +22,6 @@ def get_google_sheet():
     client = gspread.authorize(creds)
     return client.open_by_url(st.secrets["SHEET_URL"])
 
-# NEW: The App's Memory System to prevent API limits!
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_all_records(sheet_name):
     client = get_google_sheet()
@@ -67,7 +66,7 @@ except Exception as e:
     st.error(f"Error connecting to Google Sheets. Check your secrets file! Details: {e}")
     st.stop()
 
-# --- INITIALIZE OR READ DATA (USING THE MEMORY SYSTEM) ---
+# --- INITIALIZE OR READ DATA ---
 schedule_data = fetch_all_records("Schedule")
 if not schedule_data:
     schedule_ws.append_row(["Day", "Status", "Meal"])
@@ -131,7 +130,6 @@ with col_h1:
 with col_h2:
     st.write("") 
     if st.button("🔄 Sync App", use_container_width=True):
-        # Manually clear all memory to get fresh data
         fetch_all_records.clear()
         fetch_col_values.clear()
         st.rerun()
@@ -270,6 +268,26 @@ with tab1:
 with tab2:
     st.header("🛒 Smart Shopping Lists")
     
+    # NEW: Manual Add Expander for the Grocery Lists
+    with st.expander("➕ Manually Add an Item to a List"):
+        col_m1, col_m2, col_m3 = st.columns([2, 2, 1])
+        with col_m1:
+            manual_item = st.text_input("Item name:", placeholder="e.g., 1 Bag of Apples")
+        with col_m2:
+            list_options = ["🏡 Household (Sun/Mon)", "🧑‍🍳 Cook List 1 (Tues/Wed)", "🧑‍🍳 Cook List 2 (Thurs/Fri)"]
+            target_list = st.selectbox("Which list?", list_options)
+        with col_m3:
+            st.write("")
+            st.write("")
+            if st.button("Add Item", use_container_width=True):
+                if manual_item:
+                    clean_manual = manual_item.replace("*", "").strip().title()
+                    groceries_ws.append_row([target_list, clean_manual])
+                    fetch_all_records.clear("Groceries")
+                    st.rerun()
+                    
+    st.divider()
+    
     if st.button("✨ Compile & Sync New Grocery Lists", type="primary", use_container_width=True):
         with st.spinner("Chef Gemini is clearing the old lists and organizing the aisles..."):
             
@@ -283,26 +301,33 @@ with tab2:
             groceries_ws.append_row(["List Type", "Item"])
             rows_to_add = []
 
+            # NEW: Upgraded System Prompt to stop comma-splitting
             system_prompt = f"""
             Extract all ingredients from the following recipes. Combine quantities where possible.
             CRITICAL INSTRUCTION: The user already has these pantry items: {pantry_string}. DO NOT include them.
-            RETURN ONLY A COMMA-SEPARATED LIST OF THE FINAL INGREDIENTS. Do not use bullet points or introductory text.
-            Example output: 2 lbs Ground Turkey, 1 head Garlic, 3 Bell Peppers
+            RETURN ONLY A NEWLINE-SEPARATED LIST OF THE FINAL INGREDIENTS. 
+            Do not use commas to separate different ingredients (keep "Garlic, Minced" as one line).
+            Do not use bullet points or introductory text. Put each ingredient on its own line.
+            Example output: 
+            2 lbs Ground Turkey
+            1 head Garlic, Minced
+            3 Bell Peppers
             """
 
+            # NEW: Upgraded parsing logic (.split("\n") instead of .split(","))
             if household_text:
                 resp = model.generate_content(system_prompt + "\nRecipes:\n" + household_text)
-                items = [x.strip().title() for x in resp.text.replace("*", "").split(",") if x.strip()]
+                items = [x.strip().title().lstrip("- ").lstrip("* ") for x in resp.text.split("\n") if x.strip()]
                 rows_to_add.extend([["🏡 Household (Sun/Mon)", item] for item in items])
                 
             if cook_text_1:
                 resp = model.generate_content(system_prompt + "\nRecipes:\n" + cook_text_1)
-                items = [x.strip().title() for x in resp.text.replace("*", "").split(",") if x.strip()]
+                items = [x.strip().title().lstrip("- ").lstrip("* ") for x in resp.text.split("\n") if x.strip()]
                 rows_to_add.extend([["🧑‍🍳 Cook List 1 (Tues/Wed)", item] for item in items])
                 
             if cook_text_2:
                 resp = model.generate_content(system_prompt + "\nRecipes:\n" + cook_text_2)
-                items = [x.strip().title() for x in resp.text.replace("*", "").split(",") if x.strip()]
+                items = [x.strip().title().lstrip("- ").lstrip("* ") for x in resp.text.split("\n") if x.strip()]
                 rows_to_add.extend([["🧑‍🍳 Cook List 2 (Thurs/Fri)", item] for item in items])
                 
             if rows_to_add:
