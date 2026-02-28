@@ -210,7 +210,6 @@ with tab1:
             if details["meal"]:
                 st.write(details["meal"])
                 
-                # FIXED: Line-by-line parsing logic
                 with st.expander("✏️ Line-by-Line Edit & AI Substitute"):
                     lines = details["meal"].split("\n")
                     new_lines = []
@@ -218,9 +217,7 @@ with tab1:
                     for idx, line in enumerate(lines):
                         stripped = line.strip()
                         
-                        # Identify exactly what kind of line this is
                         is_bold_header = stripped.startswith("**")
-                        # It is an italic description ONLY if it starts with an asterisk but NO space follows it
                         is_italic_desc = stripped.startswith("*") and not stripped.startswith("**") and not stripped.startswith("* ")
                         
                         if stripped == "" or is_bold_header or is_italic_desc:
@@ -242,7 +239,6 @@ with tab1:
                                         """
                                         new_ingredient = model.generate_content(prompt).text.strip().lstrip("- ").lstrip("* ")
                                         
-                                        # Keep the bullet format consistent with the original line
                                         if line.startswith("* "):
                                             new_ingredient = f"* {new_ingredient}"
                                         elif line.startswith("- "):
@@ -250,8 +246,14 @@ with tab1:
                                             
                                         lines[idx] = new_ingredient
                                         updated_meal = "\n".join(lines)
+                                        
+                                        # Update Google Sheets
                                         schedule_ws.update_cell(details["row_index"], 3, updated_meal)
                                         fetch_all_records.clear("Schedule")
+                                        
+                                        # NEW: Force Streamlit to overwrite the stubborn text box memory!
+                                        st.session_state[f"edit_line_{day}_{idx}"] = new_ingredient
+                                        
                                         st.rerun()
                                         
                     st.write("")
