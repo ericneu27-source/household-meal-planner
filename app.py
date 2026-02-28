@@ -210,19 +210,23 @@ with tab1:
             if details["meal"]:
                 st.write(details["meal"])
                 
-                # NEW: THE LINE-BY-LINE RECIPE EDITOR
+                # FIXED: Line-by-line parsing logic
                 with st.expander("✏️ Line-by-Line Edit & AI Substitute"):
                     lines = details["meal"].split("\n")
                     new_lines = []
                     
                     for idx, line in enumerate(lines):
                         stripped = line.strip()
-                        # If the line is a Header (starts with *) or is blank, just display it statically
-                        if stripped.startswith("*") or stripped == "":
+                        
+                        # Identify exactly what kind of line this is
+                        is_bold_header = stripped.startswith("**")
+                        # It is an italic description ONLY if it starts with an asterisk but NO space follows it
+                        is_italic_desc = stripped.startswith("*") and not stripped.startswith("**") and not stripped.startswith("* ")
+                        
+                        if stripped == "" or is_bold_header or is_italic_desc:
                             st.markdown(line)
                             new_lines.append(line)
                         else:
-                            # If it's an actual ingredient, render the editor tools!
                             col_e1, col_e2 = st.columns([4, 1])
                             with col_e1:
                                 edited_line = st.text_input(f"Edit {idx}", value=line, key=f"edit_line_{day}_{idx}", label_visibility="collapsed")
@@ -230,16 +234,20 @@ with tab1:
                             with col_e2:
                                 if st.button("🪄 AI Sub", key=f"sub_btn_{day}_{idx}"):
                                     with st.spinner("Swapping..."):
-                                        title = lines[0].replace("**", "")
+                                        title = next((l for l in lines if "**" in l), "the recipe").replace("**", "")
                                         prompt = f"""
                                         I am cooking {title}. I need a direct ingredient substitution for '{line}'. 
                                         Please provide JUST the replacement ingredient and its measurement, formatted exactly like the original line. 
                                         Do not use introductory text.
                                         """
-                                        # Clean up any random bullets the AI might try to add
                                         new_ingredient = model.generate_content(prompt).text.strip().lstrip("- ").lstrip("* ")
                                         
-                                        # Instantly replace that line and save it to the cloud
+                                        # Keep the bullet format consistent with the original line
+                                        if line.startswith("* "):
+                                            new_ingredient = f"* {new_ingredient}"
+                                        elif line.startswith("- "):
+                                            new_ingredient = f"- {new_ingredient}"
+                                            
                                         lines[idx] = new_ingredient
                                         updated_meal = "\n".join(lines)
                                         schedule_ws.update_cell(details["row_index"], 3, updated_meal)
@@ -247,7 +255,6 @@ with tab1:
                                         st.rerun()
                                         
                     st.write("")
-                    # Button to save any manual typing changes (like tweaking "1 lb" to "2 lbs")
                     if st.button("💾 Save Manual Edits", key=f"save_manual_{day}", use_container_width=True):
                         updated_meal = "\n".join(new_lines)
                         if updated_meal != details["meal"]:
