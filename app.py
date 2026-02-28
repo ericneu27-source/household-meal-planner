@@ -268,27 +268,8 @@ with tab1:
 with tab2:
     st.header("🛒 Smart Shopping Lists")
     
-    # NEW: Manual Add Expander for the Grocery Lists
-    with st.expander("➕ Manually Add an Item to a List"):
-        col_m1, col_m2, col_m3 = st.columns([2, 2, 1])
-        with col_m1:
-            manual_item = st.text_input("Item name:", placeholder="e.g., 1 Bag of Apples")
-        with col_m2:
-            list_options = ["🏡 Household (Sun/Mon)", "🧑‍🍳 Cook List 1 (Tues/Wed)", "🧑‍🍳 Cook List 2 (Thurs/Fri)"]
-            target_list = st.selectbox("Which list?", list_options)
-        with col_m3:
-            st.write("")
-            st.write("")
-            if st.button("Add Item", use_container_width=True):
-                if manual_item:
-                    clean_manual = manual_item.replace("*", "").strip().title()
-                    groceries_ws.append_row([target_list, clean_manual])
-                    fetch_all_records.clear("Groceries")
-                    st.rerun()
-                    
-    st.divider()
-    
-    if st.button("✨ Compile & Sync New Grocery Lists", type="primary", use_container_width=True):
+    # 1. THE COMPILE BUTTON
+    if st.button("✨ Compile AI Grocery Lists", type="primary", use_container_width=True):
         with st.spinner("Chef Gemini is clearing the old lists and organizing the aisles..."):
             
             household_text = "".join([f"\n{schedule_dict[day]['meal']}" for day in ["Sunday", "Monday"] if schedule_dict[day]["meal"]])
@@ -301,20 +282,24 @@ with tab2:
             groceries_ws.append_row(["List Type", "Item"])
             rows_to_add = []
 
-            # NEW: Upgraded System Prompt to stop comma-splitting
+            # NEW: Completely locked-down AI Prompt to prevent ingredient splitting
             system_prompt = f"""
             Extract all ingredients from the following recipes. Combine quantities where possible.
             CRITICAL INSTRUCTION: The user already has these pantry items: {pantry_string}. DO NOT include them.
-            RETURN ONLY A NEWLINE-SEPARATED LIST OF THE FINAL INGREDIENTS. 
-            Do not use commas to separate different ingredients (keep "Garlic, Minced" as one line).
-            Do not use bullet points or introductory text. Put each ingredient on its own line.
+            
+            FORMATTING RULES:
+            1. Output a NEWLINE-SEPARATED list. 
+            2. Put each completely separate ingredient on its own line.
+            3. NEVER split a single ingredient across multiple lines. "2 lbs Boneless, Skinless Salmon" MUST be on one single line.
+            4. You MAY use commas within an ingredient line.
+            5. Do not use bullet points, asterisks, or introductory text.
+            
             Example output: 
             2 lbs Ground Turkey
             1 head Garlic, Minced
             3 Bell Peppers
             """
 
-            # NEW: Upgraded parsing logic (.split("\n") instead of .split(","))
             if household_text:
                 resp = model.generate_content(system_prompt + "\nRecipes:\n" + household_text)
                 items = [x.strip().title().lstrip("- ").lstrip("* ") for x in resp.text.split("\n") if x.strip()]
@@ -339,6 +324,7 @@ with tab2:
             
     st.divider()
 
+    # 2. THE RENDERED LISTS
     if not groceries_data:
         st.info("Your grocery lists are empty. Hit the big compile button to generate them!")
     else:
@@ -363,6 +349,24 @@ with tab2:
                             fetch_all_records.clear("Groceries")
                             st.rerun()
                 st.write("---")
+
+    # 3. THE MANUAL ADD TOOL (Now permanently visible at the bottom!)
+    st.subheader("➕ Add an Extra Item")
+    st.write("*(Note: Compiling the AI lists will reset this tab, so add your manual items after you compile!)*")
+    
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+        manual_item = st.text_input("Item name:", placeholder="e.g., 1 Bag of Apples")
+    with col_m2:
+        list_options = ["🏡 Household (Sun/Mon)", "🧑‍🍳 Cook List 1 (Tues/Wed)", "🧑‍🍳 Cook List 2 (Thurs/Fri)"]
+        target_list = st.selectbox("Which list?", list_options)
+        
+    if st.button("Add Item to List", use_container_width=True):
+        if manual_item:
+            clean_manual = manual_item.replace("*", "").strip().title()
+            groceries_ws.append_row([target_list, clean_manual])
+            fetch_all_records.clear("Groceries")
+            st.rerun()
 
 with tab3:
     st.header("🥫 Virtual Pantry")
