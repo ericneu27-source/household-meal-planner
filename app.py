@@ -251,8 +251,10 @@ with tab1:
                                         schedule_ws.update_cell(details["row_index"], 3, updated_meal)
                                         fetch_all_records.clear("Schedule")
                                         
-                                        # NEW: Force Streamlit to overwrite the stubborn text box memory!
-                                        st.session_state[f"edit_line_{day}_{idx}"] = new_ingredient
+                                        # FIXED: Delete the widget's memory so it safely pulls the new text on rerun!
+                                        widget_key = f"edit_line_{day}_{idx}"
+                                        if widget_key in st.session_state:
+                                            del st.session_state[widget_key]
                                         
                                         st.rerun()
                                         
