@@ -8,7 +8,6 @@ import random
 # --- SETUP ---
 st.set_page_config(page_title="Household Meal Planner", page_icon="🍳", layout="centered")
 
-# NEW: Initialize Short-Term Memory for the Voila Pop-up
 if 'voila_pending' not in st.session_state:
     st.session_state.voila_pending = False
 if 'voila_new_cart' not in st.session_state:
@@ -16,7 +15,6 @@ if 'voila_new_cart' not in st.session_state:
 if 'voila_item' not in st.session_state:
     st.session_state.voila_item = ""
 
-# Securely load the AI API key
 api_key = st.secrets["GEMINI_API_KEY"]
 genai.configure(api_key=api_key)
 model = genai.GenerativeModel('gemini-2.5-flash')
@@ -212,11 +210,48 @@ with tab1:
             if details["meal"]:
                 st.write(details["meal"])
                 
-                with st.expander("✏️ Modify Recipe / Ingredients"):
-                    edited_recipe = st.text_area("Make your changes here:", value=details["meal"], height=200, key=f"edit_recipe_{day}")
-                    if st.button("Save Edits", key=f"save_edit_{day}", use_container_width=True):
-                        if edited_recipe != details["meal"]:
-                            schedule_ws.update_cell(details["row_index"], 3, edited_recipe)
+                # NEW: THE LINE-BY-LINE RECIPE EDITOR
+                with st.expander("✏️ Line-by-Line Edit & AI Substitute"):
+                    lines = details["meal"].split("\n")
+                    new_lines = []
+                    
+                    for idx, line in enumerate(lines):
+                        stripped = line.strip()
+                        # If the line is a Header (starts with *) or is blank, just display it statically
+                        if stripped.startswith("*") or stripped == "":
+                            st.markdown(line)
+                            new_lines.append(line)
+                        else:
+                            # If it's an actual ingredient, render the editor tools!
+                            col_e1, col_e2 = st.columns([4, 1])
+                            with col_e1:
+                                edited_line = st.text_input(f"Edit {idx}", value=line, key=f"edit_line_{day}_{idx}", label_visibility="collapsed")
+                                new_lines.append(edited_line)
+                            with col_e2:
+                                if st.button("🪄 AI Sub", key=f"sub_btn_{day}_{idx}"):
+                                    with st.spinner("Swapping..."):
+                                        title = lines[0].replace("**", "")
+                                        prompt = f"""
+                                        I am cooking {title}. I need a direct ingredient substitution for '{line}'. 
+                                        Please provide JUST the replacement ingredient and its measurement, formatted exactly like the original line. 
+                                        Do not use introductory text.
+                                        """
+                                        # Clean up any random bullets the AI might try to add
+                                        new_ingredient = model.generate_content(prompt).text.strip().lstrip("- ").lstrip("* ")
+                                        
+                                        # Instantly replace that line and save it to the cloud
+                                        lines[idx] = new_ingredient
+                                        updated_meal = "\n".join(lines)
+                                        schedule_ws.update_cell(details["row_index"], 3, updated_meal)
+                                        fetch_all_records.clear("Schedule")
+                                        st.rerun()
+                                        
+                    st.write("")
+                    # Button to save any manual typing changes (like tweaking "1 lb" to "2 lbs")
+                    if st.button("💾 Save Manual Edits", key=f"save_manual_{day}", use_container_width=True):
+                        updated_meal = "\n".join(new_lines)
+                        if updated_meal != details["meal"]:
+                            schedule_ws.update_cell(details["row_index"], 3, updated_meal)
                             fetch_all_records.clear("Schedule")
                             st.rerun()
                 
@@ -230,7 +265,7 @@ with tab1:
                     if st.button("Save to Vault", key=f"save_{day}", use_container_width=True):
                         if meal_name:
                             numeric_rating = rating[0] 
-                            vault_ws.append_row([meal_name, edited_recipe, numeric_rating])
+                            vault_ws.append_row([meal_name, details["meal"], numeric_rating])
                             fetch_all_records.clear("Recipe Vault")
                             st.success(f"Saved {meal_name} with {numeric_rating} stars!")
                             st.rerun()
@@ -460,14 +495,12 @@ with tab5:
     st.header("🚚 Voila Delivery List")
     st.write("Manage your weekly Sobeys order. Add an item, and Chef Gemini will automatically combine matching quantities!")
     
-    # NEW: The duplicate detection pop-up UI
     if st.session_state.voila_pending:
         st.warning(f"⚠️ **Duplicate Detected!** It looks like you already have something similar to **'{st.session_state.voila_item}'** in your cart.")
         
         col_c1, col_c2, col_c3 = st.columns(3)
         with col_c1:
             if st.button("✅ Combine Them", use_container_width=True):
-                # Save the AI's combined math list
                 voila_ws.clear()
                 voila_ws.append_row(["Item"])
                 rows_to_add = [[item] for item in st.session_state.voila_new_cart]
@@ -478,20 +511,17 @@ with tab5:
                 st.rerun()
         with col_c2:
             if st.button("➕ Add Separately", use_container_width=True):
-                # Ignore the math and just add the raw item to the bottom
                 voila_ws.append_row([st.session_state.voila_item])
                 fetch_col_values.clear("Voila", 1)
                 st.session_state.voila_pending = False
                 st.rerun()
         with col_c3:
             if st.button("❌ Cancel", use_container_width=True):
-                # Forget it ever happened
                 st.session_state.voila_pending = False
                 st.rerun()
         st.divider()
         
     else:
-        # Standard input box
         col_vadd1, col_vadd2 = st.columns([3, 1])
         with col_vadd1:
             new_voila = st.text_input("Add an item to your Voila list:", placeholder="e.g., 2 boxes of Cheerios, 3 Apples...")
@@ -504,7 +534,6 @@ with tab5:
                         clean_voila = new_voila.replace("*", "").strip().title()
                         
                         if not current_voila:
-                            # Empty cart, just add it
                             voila_ws.append_row([clean_voila])
                             fetch_col_values.clear("Voila", 1)
                             st.rerun()
@@ -524,20 +553,15 @@ with tab5:
                             response = model.generate_content(prompt)
                             lines = response.text.strip().split("\n")
                             
-                            # Read the AI's first line to see if it yelled YES or NO
                             is_duplicate = "YES" in lines[0].upper()
-                            
-                            # Grab the actual list of items
                             updated_cart = [x.strip().title().lstrip("- ").lstrip("* ") for x in lines[1:] if x.strip()]
                             
                             if is_duplicate:
-                                # Trigger the pop-up memory
                                 st.session_state.voila_pending = True
                                 st.session_state.voila_item = clean_voila
                                 st.session_state.voila_new_cart = updated_cart
                                 st.rerun()
                             else:
-                                # No duplicate, just append the raw item and go
                                 voila_ws.append_row([clean_voila])
                                 fetch_col_values.clear("Voila", 1)
                                 st.rerun()
