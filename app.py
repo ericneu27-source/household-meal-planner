@@ -62,7 +62,6 @@ if not pantry_data:
 
 current_pantry = pantry_data[1:]
 
-# NEW: We are now tracking the exact "row_index" for the vault meals too!
 vault_data = vault_ws.get_all_records()
 vault_dict = {
     str(row["Meal Title"]): {
@@ -112,6 +111,14 @@ with tab1:
             if details["meal"]:
                 st.write(details["meal"])
                 
+                # NEW: The Modify Recipe Editor
+                with st.expander("✏️ Modify Recipe / Ingredients"):
+                    edited_recipe = st.text_area("Make your changes here (the Grocery List will use your updated version!):", value=details["meal"], height=200, key=f"edit_recipe_{day}")
+                    if st.button("Save Edits", key=f"save_edit_{day}", use_container_width=True):
+                        if edited_recipe != details["meal"]:
+                            schedule_ws.update_cell(details["row_index"], 3, edited_recipe)
+                            st.rerun()
+                
                 with st.expander("⭐ Rate & Save this Meal"):
                     col_r1, col_r2 = st.columns([2, 1])
                     with col_r1:
@@ -122,7 +129,7 @@ with tab1:
                     if st.button("Save to Vault", key=f"save_{day}", use_container_width=True):
                         if meal_name:
                             numeric_rating = rating[0] 
-                            vault_ws.append_row([meal_name, details["meal"], numeric_rating])
+                            vault_ws.append_row([meal_name, edited_recipe, numeric_rating]) # Note: saves your EDITED recipe to the vault!
                             st.success(f"Saved {meal_name} with {numeric_rating} stars!")
                             st.rerun()
             
@@ -268,12 +275,10 @@ with tab4:
                 
                 st.divider()
                 
-                # NEW: The Rating Update Interface
                 col_u1, col_u2 = st.columns(2)
                 with col_u1:
                     rating_options = ["5 (Love)", "4 (Like)", "3 (Okay)", "2 (Dislike)", "1 (Never Again)"]
                     current_val = str(data["rating"])
-                    # Find which text option matches their current numerical rating to display it as default
                     default_idx = next((i for i, opt in enumerate(rating_options) if opt.startswith(current_val)), 0)
                     new_rating = st.selectbox("Change Rating:", rating_options, index=default_idx, key=f"edit_rate_{title}")
                 
@@ -282,11 +287,9 @@ with tab4:
                     st.write("")
                     if st.button("Update Rating", key=f"upd_vault_{title}", use_container_width=True):
                         if new_rating[0] != current_val:
-                            # Column 3 is the Rating column in Google Sheets
                             vault_ws.update_cell(data["row_index"], 3, new_rating[0])
                             st.rerun()
                 
-                # Notice we updated the row deletion logic here to be perfectly precise using the exact row_index
                 if st.button("Delete from Vault", key=f"del_vault_{title}"):
                     vault_ws.delete_rows(data["row_index"])
                     st.rerun()
