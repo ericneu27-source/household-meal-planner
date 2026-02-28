@@ -46,6 +46,13 @@ try:
         settings_ws.append_row(["Setting", "Value"])
         settings_ws.append_row(["Diet & Portions", "High-protein dinner recipes (using chicken, fish, ground turkey, or a high-protein vegetarian base). Scale all ingredient measurements to feed exactly 3 adults and 2 children for a single meal."])
 
+    # NEW: Create the Interactive Groceries tab
+    try:
+        groceries_ws = db.worksheet("Groceries")
+    except:
+        groceries_ws = db.add_worksheet(title="Groceries", rows="200", cols="2")
+        groceries_ws.append_row(["List Type", "Item"])
+
 except Exception as e:
     st.error(f"Error connecting to Google Sheets. Check your secrets file! Details: {e}")
     st.stop()
@@ -54,7 +61,6 @@ except Exception as e:
 schedule_data = schedule_ws.get_all_records()
 if not schedule_data:
     schedule_ws.append_row(["Day", "Status", "Meal"])
-    # Updated the default text to reflect the cook making two separate meals
     defaults = [
         ["Monday", "Cook at Home", ""],
         ["Tuesday", "Cook Day 1 (Makes Tues & Wed meals)", ""],
@@ -103,6 +109,9 @@ for row in settings_data:
     if row.get("Setting") == "Diet & Portions":
         diet_prefs = str(row.get("Value"))
 
+# NEW: Read the Groceries Data
+groceries_data = groceries_ws.get_all_records()
+
 # --- HEADER ---
 col_h1, col_h2 = st.columns([4, 1])
 with col_h1:
@@ -121,7 +130,6 @@ with tab1:
     if st.button("✨ Auto-Fill Magic Week", type="primary", use_container_width=True):
         with st.spinner("Chef Gemini is designing your perfect week (this takes about 10 seconds)..."):
             
-            # NEW: We added Wednesday and Friday to the list of days that get fresh recipes
             prep_days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
             new_meals = {}
             
@@ -131,13 +139,11 @@ with tab1:
             fav_days = prep_days[:len(chosen_favs)]
             ai_days = prep_days[len(chosen_favs):]
             
-            # 1. Populate the Favorites
             for i, day in enumerate(fav_days):
                 fav_title = chosen_favs[i]
                 fav_data = vault_dict[fav_title]
                 new_meals[day] = f"**{fav_title}**\n*(Vault Rating: {fav_data['rating']} Stars)*\n\n**Ingredients needed:**\n{fav_data['recipe']}"
             
-            # 2. Generate AI meals for ALL 6 remaining days
             for day in ai_days:
                 prompt = f"""
                 Suggest a dinner recipe based EXACTLY on these family preferences: {diet_prefs}.
@@ -156,10 +162,8 @@ with tab1:
                 response = model.generate_content(prompt)
                 new_meals[day] = response.text
                 
-            # 3. Handle Saturday (Leftovers day!)
             new_meals["Saturday"] = "**Flexible / Clean out the fridge!**"
             
-            # 4. Save everything to Google Sheets
             for day, meal_text in new_meals.items():
                 if day in schedule_dict:
                     schedule_ws.update_cell(schedule_dict[day]["row_index"], 3, meal_text)
@@ -245,65 +249,81 @@ with tab1:
 
 with tab2:
     st.header("🛒 Smart Shopping Lists")
-    if st.button("Compile Grocery Lists"):
-        with st.spinner("Chef Gemini is organizing the aisles..."):
+    
+    # NEW: The compile button now builds a database table of ingredients
+    if st.button("✨ Compile & Sync New Grocery Lists", type="primary", use_container_width=True):
+        with st.spinner("Chef Gemini is clearing the old lists and organizing the aisles..."):
             
-            household_text = ""
-            for day in ["Sunday", "Monday"]:
-                if schedule_dict[day]["meal"]:
-                    household_text += f"\n--- {day} ---\n{schedule_dict[day]['meal']}"
-            
-            cook_text_tues_wed = ""
-            for day in ["Tuesday", "Wednesday"]:
-                if schedule_dict[day]["meal"]:
-                    cook_text_tues_wed += f"\n--- {day} ---\n{schedule_dict[day]['meal']}"
-                    
-            cook_text_thurs_fri = ""
-            for day in ["Thursday", "Friday"]:
-                if schedule_dict[day]["meal"]:
-                    cook_text_thurs_fri += f"\n--- {day} ---\n{schedule_dict[day]['meal']}"
+            household_text = "".join([f"\n{schedule_dict[day]['meal']}" for day in ["Sunday", "Monday"] if schedule_dict[day]["meal"]])
+            cook_text_1 = "".join([f"\n{schedule_dict[day]['meal']}" for day in ["Tuesday", "Wednesday"] if schedule_dict[day]["meal"]])
+            cook_text_2 = "".join([f"\n{schedule_dict[day]['meal']}" for day in ["Thursday", "Friday"] if schedule_dict[day]["meal"]])
             
             pantry_string = ", ".join(current_pantry)
+            
+            # Wipe the old lists out of the Google Sheet cleanly
+            groceries_ws.clear()
+            groceries_ws.append_row(["List Type", "Item"])
+            rows_to_add = []
+
+            # Master Prompt format for easy Python reading
+            system_prompt = f"""
+            Extract all ingredients from the following recipes. Combine quantities where possible.
+            CRITICAL INSTRUCTION: The user already has these pantry items: {pantry_string}. DO NOT include them.
+            RETURN ONLY A COMMA-SEPARATED LIST OF THE FINAL INGREDIENTS. Do not use bullet points or introductory text.
+            Example output: 2 lbs Ground Turkey, 1 head Garlic, 3 Bell Peppers
+            """
 
             if household_text:
-                prompt_house = f"""
-                Extract all ingredients from these recipes and combine them into a single grocery list. Group items by standard grocery store aisles. Combine quantities where possible.
-                CRITICAL INSTRUCTION: Here is the user's current pantry inventory: {pantry_string}. Do NOT include these pantry items in the final shopping list.
-                Format it as a clean checklist.
-                Recipes:\n{household_text}
-                """
-                st.subheader("🏡 Your Master Household List (Sun & Mon)")
-                st.write(model.generate_content(prompt_house).text)
-            else:
-                st.info("No meals scheduled for Sunday or Monday yet.")
+                resp = model.generate_content(system_prompt + "\nRecipes:\n" + household_text)
+                items = [x.strip().title() for x in resp.text.replace("*", "").split(",") if x.strip()]
+                rows_to_add.extend([["🏡 Household (Sun/Mon)", item] for item in items])
                 
-            st.divider()
-            
-            if cook_text_tues_wed:
-                prompt_cook_1 = f"""
-                Extract all ingredients from these recipes and combine them into a single grocery list. Group items by standard grocery store aisles. Combine quantities where possible.
-                CRITICAL INSTRUCTION: Here is the user's current pantry inventory: {pantry_string}. Do NOT include these pantry items in the final shopping list.
-                Format it as a clean checklist.
-                Recipes:\n{cook_text_tues_wed}
-                """
-                st.subheader("🧑‍🍳 The Cook's List 1: Tuesday Shopping (Preps Tues & Wed)")
-                st.write(model.generate_content(prompt_cook_1).text)
-            else:
-                st.info("No meals scheduled for Tuesday or Wednesday yet.")
+            if cook_text_1:
+                resp = model.generate_content(system_prompt + "\nRecipes:\n" + cook_text_1)
+                items = [x.strip().title() for x in resp.text.replace("*", "").split(",") if x.strip()]
+                rows_to_add.extend([["🧑‍🍳 Cook List 1 (Tues/Wed)", item] for item in items])
                 
-            st.divider()
+            if cook_text_2:
+                resp = model.generate_content(system_prompt + "\nRecipes:\n" + cook_text_2)
+                items = [x.strip().title() for x in resp.text.replace("*", "").split(",") if x.strip()]
+                rows_to_add.extend([["🧑‍🍳 Cook List 2 (Thurs/Fri)", item] for item in items])
+                
+            if rows_to_add:
+                # Add all new items to the Google Sheet at once (extremely fast)
+                groceries_ws.append_rows(rows_to_add)
             
-            if cook_text_thurs_fri:
-                prompt_cook_2 = f"""
-                Extract all ingredients from these recipes and combine them into a single grocery list. Group items by standard grocery store aisles. Combine quantities where possible.
-                CRITICAL INSTRUCTION: Here is the user's current pantry inventory: {pantry_string}. Do NOT include these pantry items in the final shopping list.
-                Format it as a clean checklist.
-                Recipes:\n{cook_text_thurs_fri}
-                """
-                st.subheader("🧑‍🍳 The Cook's List 2: Thursday Shopping (Preps Thurs & Fri)")
-                st.write(model.generate_content(prompt_cook_2).text)
-            else:
-                st.info("No meals scheduled for Thursday or Friday yet.")
+            st.success("Lists successfully generated and synced to all devices!")
+            st.rerun()
+            
+    st.divider()
+
+    # NEW: Displaying the Interactive Lists
+    if not groceries_data:
+        st.info("Your grocery lists are empty. Hit the big compile button to generate them!")
+    else:
+        list_categories = ["🏡 Household (Sun/Mon)", "🧑‍🍳 Cook List 1 (Tues/Wed)", "🧑‍🍳 Cook List 2 (Thurs/Fri)"]
+        
+        for category in list_categories:
+            # Find all items that belong to this specific shopping trip
+            items_in_category = [(i, row) for i, row in enumerate(groceries_data) if row["List Type"] == category]
+            
+            if items_in_category:
+                st.subheader(category)
+                for original_index, row in items_in_category:
+                    col_g1, col_g2 = st.columns([4, 1])
+                    with col_g1:
+                        st.write(f"🛒 {row['Item']}")
+                    with col_g2:
+                        if st.button("To Pantry", key=f"buy_{original_index}"):
+                            # 1. Clean the item name
+                            clean_item = row['Item'].replace("*", "").strip().title()
+                            # 2. Add it to the Pantry if it isn't already there
+                            if clean_item and clean_item not in current_pantry:
+                                pantry_ws.append_row([clean_item])
+                            # 3. Delete it from the active Grocery List
+                            groceries_ws.delete_rows(original_index + 2)
+                            st.rerun()
+                st.write("---")
 
 with tab3:
     st.header("🥫 Virtual Pantry")
