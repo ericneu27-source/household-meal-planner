@@ -4,6 +4,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import json
 import random
+import concurrent.futures # NEW: Added for lightning-fast parallel processing!
 
 # --- SETUP ---
 st.set_page_config(page_title="Household Meal Planner", page_icon="🍳", layout="centered")
@@ -147,45 +148,62 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📅 Schedule", "🛒 Groceries",
 
 with tab1:
     if st.button("✨ Auto-Fill Magic Week", type="primary", use_container_width=True):
-        with st.spinner("Chef Gemini is designing your perfect week (this takes about 10 seconds)..."):
+        with st.spinner("Firing up the kitchen! Generating parallel AI recipes..."):
             
             prep_days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
             new_meals = {}
             
             chosen_favs = random.sample(loved_meals, min(2, len(loved_meals)))
-            
             random.shuffle(prep_days)
             fav_days = prep_days[:len(chosen_favs)]
             ai_days = prep_days[len(chosen_favs):]
             
+            # Fill the Vault meals instantly
             for i, day in enumerate(fav_days):
                 fav_title = chosen_favs[i]
                 fav_data = vault_dict[fav_title]
                 new_meals[day] = f"**{fav_title}**\n*(Vault Rating: {fav_data['rating']} Stars)*\n\n**Ingredients needed:**\n{fav_data['recipe']}"
             
-            for day in ai_days:
-                prompt = f"""
-                Suggest a dinner recipe based EXACTLY on these family preferences: {diet_prefs}.
+            # NEW: Helper function for multithreading the AI calls
+            def fetch_magic_meal(prompt_text):
+                return model.generate_content(prompt_text).text
+
+            # NEW: Run all AI generation requests at the exact same time!
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future_to_day = {}
+                for day in ai_days:
+                    prompt = f"""
+                    Suggest a dinner recipe based EXACTLY on these family preferences: {diet_prefs}.
+                    CRITICAL INSTRUCTIONS:
+                    - Do NOT suggest these 1 and 2-star banned meals: {banned_str}
+                    - Provide a fresh, creative idea.
+                    Format your response exactly like this:
+                    **[Recipe Title]**
+                    *Brief 1-sentence description.*
+                    
+                    **Ingredients needed:**
+                    (Provide a simple bulleted list with quantities)
+                    """
+                    future = executor.submit(fetch_magic_meal, prompt)
+                    future_to_day[future] = day
                 
-                CRITICAL INSTRUCTIONS:
-                - Do NOT suggest these 1 and 2-star banned meals: {banned_str}
-                - Provide a fresh, creative idea.
-                
-                Format your response exactly like this:
-                **[Recipe Title]**
-                *Brief 1-sentence description.*
-                
-                **Ingredients needed:**
-                (Provide a simple bulleted list with quantities)
-                """
-                response = model.generate_content(prompt)
-                new_meals[day] = response.text
+                # As each thread finishes, assign the meal to the right day
+                for future in concurrent.futures.as_completed(future_to_day):
+                    day = future_to_day[future]
+                    new_meals[day] = future.result()
                 
             new_meals["Saturday"] = "**Flexible / Clean out the fridge!**"
             
+            # NEW: Batch Update Google Sheets (Sends all rows in 1 single API call instead of 7!)
+            cells_to_update = []
             for day, meal_text in new_meals.items():
                 if day in schedule_dict:
-                    schedule_ws.update_cell(schedule_dict[day]["row_index"], 3, meal_text)
+                    row_index = schedule_dict[day]["row_index"]
+                    # Col 3 is the "Meal" column
+                    cells_to_update.append(gspread.Cell(row=row_index, col=3, value=meal_text))
+            
+            if cells_to_update:
+                schedule_ws.update_cells(cells_to_update)
             
             fetch_all_records.clear("Schedule")
             st.rerun()
@@ -277,7 +295,6 @@ with tab1:
                             st.success(f"Saved {meal_name} with {numeric_rating} stars!")
                             st.rerun()
             
-            # NEW: The Craving Enforcer
             if "Flexible" not in details["status"]:
                 required_ingredients = st.text_input(f"Craving something specific for {day}?", key=f"req_{day}", placeholder="e.g., chicken, pasta, sweet potatoes...")
                 
@@ -285,13 +302,10 @@ with tab1:
                 with col_btn1:
                     if st.button(f"✨ Generate New Meal", key=f"btn_{day}", use_container_width=True):
                         with st.spinner(f"Chef Gemini is planning {day}..."):
-                            
-                            # If you typed something, we strictly enforce it. Otherwise, leave it blank.
                             req_string = f"\n- STRICT REQUIREMENT: You MUST base this recipe around these specific ingredients: {required_ingredients.strip()}." if required_ingredients.strip() else ""
                             
                             prompt = f"""
                             Suggest a dinner recipe based EXACTLY on these family preferences: {diet_prefs}.
-                            
                             CRITICAL INSTRUCTIONS:{req_string}
                             - Here are the family's 4 and 5-star meals. You are highly encouraged to suggest one of these, or a very close variation: {loved_str}
                             - Do NOT suggest these 1 and 2-star banned meals: {banned_str}
@@ -326,7 +340,7 @@ with tab2:
     st.header("🛒 Smart Shopping Lists")
     
     if st.button("✨ Compile AI Grocery Lists", type="primary", use_container_width=True):
-        with st.spinner("Chef Gemini is clearing the old lists and organizing the aisles..."):
+        with st.spinner("Dispatching agents to organize the aisles in parallel..."):
             
             household_text = "".join([f"\n{schedule_dict[day]['meal']}" for day in ["Sunday", "Monday"] if schedule_dict[day]["meal"]])
             cook_text_1 = "".join([f"\n{schedule_dict[day]['meal']}" for day in ["Tuesday", "Wednesday"] if schedule_dict[day]["meal"]])
@@ -350,29 +364,24 @@ with tab2:
             5. NEVER split a single ingredient across multiple lines.
             6. You MAY use commas within an ingredient line.
             7. Do not use bullet points, asterisks, or introductory text.
-            
-            Example output: 
-            ### Produce
-            3 Bell Peppers
-            1 head Garlic, Minced
-            ### Meat
-            2 lbs Ground Turkey
             """
 
-            if household_text:
-                resp = model.generate_content(system_prompt + "\nRecipes:\n" + household_text)
-                items = [x.strip().title().lstrip("- ").lstrip("* ") for x in resp.text.split("\n") if x.strip()]
-                rows_to_add.extend([["🏡 Household (Sun/Mon)", item] for item in items])
+            # NEW: Helper function to generate a specific shopping list
+            def get_grocery_list(prompt_text, list_name):
+                if not prompt_text.strip(): return []
+                resp = model.generate_content(system_prompt + "\nRecipes:\n" + prompt_text).text
+                items = [x.strip().title().lstrip("- ").lstrip("* ") for x in resp.split("\n") if x.strip()]
+                return [[list_name, item] for item in items]
+
+            # NEW: Ask Gemini to process all 3 grocery lists simultaneously!
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                f_house = executor.submit(get_grocery_list, household_text, "🏡 Household (Sun/Mon)")
+                f_cook1 = executor.submit(get_grocery_list, cook_text_1, "🧑‍🍳 Cook List 1 (Tues/Wed)")
+                f_cook2 = executor.submit(get_grocery_list, cook_text_2, "🧑‍🍳 Cook List 2 (Thurs/Fri)")
                 
-            if cook_text_1:
-                resp = model.generate_content(system_prompt + "\nRecipes:\n" + cook_text_1)
-                items = [x.strip().title().lstrip("- ").lstrip("* ") for x in resp.text.split("\n") if x.strip()]
-                rows_to_add.extend([["🧑‍🍳 Cook List 1 (Tues/Wed)", item] for item in items])
-                
-            if cook_text_2:
-                resp = model.generate_content(system_prompt + "\nRecipes:\n" + cook_text_2)
-                items = [x.strip().title().lstrip("- ").lstrip("* ") for x in resp.text.split("\n") if x.strip()]
-                rows_to_add.extend([["🧑‍🍳 Cook List 2 (Thurs/Fri)", item] for item in items])
+                rows_to_add.extend(f_house.result())
+                rows_to_add.extend(f_cook1.result())
+                rows_to_add.extend(f_cook2.result())
                 
             if rows_to_add:
                 groceries_ws.append_rows(rows_to_add)
