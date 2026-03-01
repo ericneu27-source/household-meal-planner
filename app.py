@@ -277,15 +277,22 @@ with tab1:
                             st.success(f"Saved {meal_name} with {numeric_rating} stars!")
                             st.rerun()
             
+            # NEW: The Craving Enforcer
             if "Flexible" not in details["status"]:
+                required_ingredients = st.text_input(f"Craving something specific for {day}?", key=f"req_{day}", placeholder="e.g., chicken, pasta, sweet potatoes...")
+                
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
-                    if st.button(f"✨ Single Generate", key=f"btn_{day}", use_container_width=True):
+                    if st.button(f"✨ Generate New Meal", key=f"btn_{day}", use_container_width=True):
                         with st.spinner(f"Chef Gemini is planning {day}..."):
+                            
+                            # If you typed something, we strictly enforce it. Otherwise, leave it blank.
+                            req_string = f"\n- STRICT REQUIREMENT: You MUST base this recipe around these specific ingredients: {required_ingredients.strip()}." if required_ingredients.strip() else ""
+                            
                             prompt = f"""
                             Suggest a dinner recipe based EXACTLY on these family preferences: {diet_prefs}.
                             
-                            CRITICAL INSTRUCTIONS:
+                            CRITICAL INSTRUCTIONS:{req_string}
                             - Here are the family's 4 and 5-star meals. You are highly encouraged to suggest one of these, or a very close variation: {loved_str}
                             - Do NOT suggest these 1 and 2-star banned meals: {banned_str}
                             
@@ -331,7 +338,6 @@ with tab2:
             groceries_ws.append_row(["List Type", "Item"])
             rows_to_add = []
 
-            # NEW: We tell the AI to use '###' as a secret code for aisle headers!
             system_prompt = f"""
             Extract all ingredients from the following recipes. Combine quantities where possible.
             CRITICAL INSTRUCTION: The user already has these pantry items: {pantry_string}. DO NOT include them.
@@ -390,7 +396,6 @@ with tab2:
                 for original_index, row in items_in_category:
                     item_text = str(row['Item'])
                     
-                    # NEW: Our app reads the secret '###' code and renders a bold header instead of a button!
                     if item_text.startswith("###"):
                         header_name = item_text.replace("###", "").strip()
                         st.markdown(f"<br>**🏷️ {header_name}**", unsafe_allow_html=True)
