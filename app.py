@@ -4,7 +4,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import json
 import random
-import concurrent.futures # NEW: Added for lightning-fast parallel processing!
+import concurrent.futures 
 
 # --- SETUP ---
 st.set_page_config(page_title="Household Meal Planner", page_icon="🍳", layout="centered")
@@ -158,17 +158,14 @@ with tab1:
             fav_days = prep_days[:len(chosen_favs)]
             ai_days = prep_days[len(chosen_favs):]
             
-            # Fill the Vault meals instantly
             for i, day in enumerate(fav_days):
                 fav_title = chosen_favs[i]
                 fav_data = vault_dict[fav_title]
                 new_meals[day] = f"**{fav_title}**\n*(Vault Rating: {fav_data['rating']} Stars)*\n\n**Ingredients needed:**\n{fav_data['recipe']}"
             
-            # NEW: Helper function for multithreading the AI calls
             def fetch_magic_meal(prompt_text):
                 return model.generate_content(prompt_text).text
 
-            # NEW: Run all AI generation requests at the exact same time!
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future_to_day = {}
                 for day in ai_days:
@@ -187,19 +184,16 @@ with tab1:
                     future = executor.submit(fetch_magic_meal, prompt)
                     future_to_day[future] = day
                 
-                # As each thread finishes, assign the meal to the right day
                 for future in concurrent.futures.as_completed(future_to_day):
                     day = future_to_day[future]
                     new_meals[day] = future.result()
                 
             new_meals["Saturday"] = "**Flexible / Clean out the fridge!**"
             
-            # NEW: Batch Update Google Sheets (Sends all rows in 1 single API call instead of 7!)
             cells_to_update = []
             for day, meal_text in new_meals.items():
                 if day in schedule_dict:
                     row_index = schedule_dict[day]["row_index"]
-                    # Col 3 is the "Meal" column
                     cells_to_update.append(gspread.Cell(row=row_index, col=3, value=meal_text))
             
             if cells_to_update:
@@ -329,9 +323,12 @@ with tab1:
                         
                         if selected_fav != "-- Pick from Vault --":
                             formatted_fav = f"**{selected_fav}**\n*(Vault Rating: {vault_dict[selected_fav]['rating']} Stars)*\n\n**Ingredients needed:**\n{vault_dict[selected_fav]['recipe']}"
-                            schedule_ws.update_cell(details["row_index"], 3, formatted_fav)
-                            fetch_all_records.clear("Schedule")
-                            st.rerun()
+                            
+                            # THE FIX: This stops the Streamlit Infinite Loop!
+                            if details["meal"] != formatted_fav:
+                                schedule_ws.update_cell(details["row_index"], 3, formatted_fav)
+                                fetch_all_records.clear("Schedule")
+                                st.rerun()
                     else:
                         st.write("*(Rate meals to build Vault)*")
         st.divider()
@@ -366,14 +363,12 @@ with tab2:
             7. Do not use bullet points, asterisks, or introductory text.
             """
 
-            # NEW: Helper function to generate a specific shopping list
             def get_grocery_list(prompt_text, list_name):
                 if not prompt_text.strip(): return []
                 resp = model.generate_content(system_prompt + "\nRecipes:\n" + prompt_text).text
                 items = [x.strip().title().lstrip("- ").lstrip("* ") for x in resp.split("\n") if x.strip()]
                 return [[list_name, item] for item in items]
 
-            # NEW: Ask Gemini to process all 3 grocery lists simultaneously!
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 f_house = executor.submit(get_grocery_list, household_text, "🏡 Household (Sun/Mon)")
                 f_cook1 = executor.submit(get_grocery_list, cook_text_1, "🧑‍🍳 Cook List 1 (Tues/Wed)")
